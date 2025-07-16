@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
+import 'package:fyp/Notification%20Module/NotificationScreen.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Profile.dart';
 import 'package:fyp/module/Report.dart';
@@ -76,6 +78,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             },
           ),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.notifications),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const NotificationScreen()),
+              );
+            },
+
+          )
+        ],
       ),
       drawer: SizedBox(
         width: MediaQuery.of(context).size.width * 0.75,
@@ -105,6 +118,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
       ),
       body: _screens[_selectedIndex],
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (context) => const AddJobPage()),
+          );
+        },
+        backgroundColor: Colors.teal,
+        child: const Icon(Icons.add, size: 30),
+      ),
       bottomNavigationBar: BottomNavigationBar(
         items: const [
           BottomNavigationBarItem(
