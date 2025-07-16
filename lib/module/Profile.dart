@@ -1,6 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -9,7 +13,7 @@ class ProfileScreen extends StatefulWidget {
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
+class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
@@ -25,6 +29,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _photoURL;
   bool _hasSetProfilePicture = false;
 
+  // Animation controller and animations
+  late AnimationController _animationController;
+  late Animation<double> _profilePictureScaleAnimation;
+  late Animation<double> _textFieldFadeAnimation;
+  late Animation<double> _buttonSlideAnimation;
+
   // Predefined profile picture asset paths
   static const String _boyProfileAsset = 'assets/boy.jpg';
   static const String _girlProfileAsset = 'assets/girl.jpg';
@@ -33,6 +43,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _fetchUserData();
+
+    // Initialize animation controller
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    );
+
+    // Profile picture scale animation
+    _profilePictureScaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
+    );
+
+    // Text field fade animation
+    _textFieldFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+    );
+
+    // Button slide animation
+    _buttonSlideAnimation = Tween<double>(begin: 50.0, end: 0.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
+
+    // Start animations
+    _animationController.forward();
   }
 
   @override
@@ -43,6 +77,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _bioController.dispose();
     _icController.dispose();
     _addressController.dispose();
+    _animationController.dispose();
     super.dispose();
   }
 
@@ -85,7 +120,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _selectProfilePicture() async {
-    if (_hasSetProfilePicture) return; // Prevent changing picture if already set
+    if (_hasSetProfilePicture) return;
 
     showDialog(
       context: context,
@@ -184,6 +219,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<String> _reverseGeocode(LatLng point) async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=json&lat=${point.latitude}&lon=${point.longitude}&zoom=18&addressdetails=1',
+        ),
+        headers: {'User-Agent': 'MyFYPApp/1.0'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['display_name'] ?? 'Unknown address';
+      } else {
+        return 'Failed to fetch address';
+      }
+    } catch (e) {
+      return 'Error fetching address: $e';
+    }
+  }
+
+  Future<void> _selectAddress() async {
+    try {
+      final LatLng? selectedLocation = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MapPickerScreen(
+            onLocationSelected: (LatLng location) async {
+              final address = await _reverseGeocode(location);
+              setState(() {
+                _addressController.text = address;
+              });
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Error opening map: $e';
+      });
+    }
+  }
+
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -202,11 +279,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     try {
-      // Update Firebase Authentication profile
       await user.updateDisplayName(_nameController.text);
       await user.updateEmail(_emailController.text);
 
-      // Update all fields in Firestore
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -278,7 +353,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile'),
+        centerTitle: true,
         backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
         actions: [
           IconButton(
             icon: Icon(_isEditing ? Icons.close : Icons.edit),
@@ -287,218 +364,563 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 _isEditing = !_isEditing;
                 _errorMessage = null;
                 _showResetPassword = false;
+                _animationController.reset();
+                _animationController.forward();
               });
             },
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : Form(
-          key: _formKey,
-          child: ListView(
-            children: [
-              if (_errorMessage != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16.0),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                ),
-              GestureDetector(
-                onTap: _isEditing && !_hasSetProfilePicture ? _selectProfilePicture : null,
-                child: Stack(
-                  alignment: Alignment.bottomRight,
-                  children: [
-                    CircleAvatar(
-                      radius: 50,
-                      backgroundImage: _photoURL != null
-                          ? AssetImage(_photoURL!)
-                          : NetworkImage('https://via.placeholder.com/150') as ImageProvider,
-                    ),
-                    if (_isEditing && !_hasSetProfilePicture)
-                      CircleAvatar(
-                        radius: 15,
-                        backgroundColor: Colors.teal,
-                        child: Icon(
-                          Icons.camera_alt,
-                          size: 18,
-                          color: Colors.white,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Name',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _isEditing,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your name';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _isEditing,
-                validator: (value) {
-                  if (value == null || !value.contains('@')) {
-                    return 'Please enter a valid email';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _phoneController,
-                decoration: const InputDecoration(
-                  labelText: 'Phone Number',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _isEditing,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your phone number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _icController,
-                decoration: const InputDecoration(
-                  labelText: 'IC Number',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _isEditing,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your IC number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _addressController,
-                decoration: const InputDecoration(
-                  labelText: 'Address',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _isEditing,
-                maxLines: 2,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                decoration: const InputDecoration(
-                  labelText: 'Date of Birth',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _isEditing,
-                readOnly: true,
-                controller: TextEditingController(
-                  text: _selectedDate != null
-                      ? '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}'
-                      : '',
-                ),
-                onTap: _isEditing ? () => _selectDate(context) : null,
-                validator: (value) {
-                  if (_selectedDate == null) {
-                    return 'Please select your date of birth';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _bioController,
-                decoration: const InputDecoration(
-                  labelText: 'Bio',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _isEditing,
-                maxLines: 3,
-              ),
-              const SizedBox(height: 20),
-              if (_isEditing && !_showResetPassword)
-                ElevatedButton(
-                  onPressed: () {
-                    setState(() {
-                      _showResetPassword = true;
-                    });
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.teal,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text(
-                    'Reset Password',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-              if (_isEditing && _showResetPassword)
-                Column(
-                  children: [
-                    const Text(
-                      'A password reset email will be sent to your email address.',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: _resetPassword,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      child: const Text(
-                        'Send Reset Email',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextButton(
-                      onPressed: () {
-                        setState(() {
-                          _showResetPassword = false;
-                        });
-                      },
-                      child: const Text(
-                        'Cancel',
-                        style: TextStyle(color: Colors.teal),
-                      ),
-                    ),
-                  ],
-                ),
-              if (_isEditing) const SizedBox(height: 20),
-              if (_isEditing)
-                ElevatedButton(
-                  onPressed: _saveProfile,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.teal,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text(
-                    'Save Profile',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-            ],
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.teal.shade50, Colors.white],
           ),
         ),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : Form(
+            key: _formKey,
+            child: ListView(
+              children: [
+                if (_errorMessage != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16.0),
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                Center(
+                  child: ScaleTransition(
+                    scale: _profilePictureScaleAnimation,
+                    child: GestureDetector(
+                      onTap: _isEditing && !_hasSetProfilePicture ? _selectProfilePicture : null,
+                      child: Stack(
+                        alignment: Alignment.bottomRight,
+                        children: [
+                          CircleAvatar(
+                            radius: 50,
+                            backgroundImage: _photoURL != null
+                                ? AssetImage(_photoURL!)
+                                : const NetworkImage('https://via.placeholder.com/150')
+                            as ImageProvider,
+                          ),
+                          if (_isEditing && !_hasSetProfilePicture)
+                            CircleAvatar(
+                              radius: 15,
+                              backgroundColor: Colors.teal,
+                              child: const Icon(
+                                Icons.camera_alt,
+                                size: 18,
+                                color: Colors.white,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _buildAnimatedTextField(
+                  controller: _nameController,
+                  labelText: 'Name',
+                  hintText: 'Enter your full name',
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter your name';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                _buildAnimatedTextField(
+                  controller: _emailController,
+                  labelText: 'Email',
+                  hintText: 'Enter your email address',
+                  validator: (value) {
+                    if (value == null || !value.contains('@')) {
+                      return 'Please enter a valid email';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                _buildAnimatedTextField(
+                  controller: _phoneController,
+                  labelText: 'Phone Number',
+                  hintText: 'Enter your phone number (e.g., +1234567890)',
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter your phone number';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                _buildAnimatedTextField(
+                  controller: _icController,
+                  labelText: 'IC Number',
+                  hintText: 'Enter your identification number',
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter your IC number';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                _buildAnimatedTextField(
+                  controller: _addressController,
+                  labelText: 'Address',
+                  hintText: 'Select or enter your address',
+                  maxLines: 2,
+                  suffixIcon: _isEditing
+                      ? IconButton(
+                    icon: const Icon(Icons.map, color: Colors.teal),
+                    onPressed: _selectAddress,
+                  )
+                      : null,
+                ),
+                const SizedBox(height: 16),
+                _buildAnimatedTextField(
+                  controller: TextEditingController(
+                    text: _selectedDate != null
+                        ? '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}'
+                        : '',
+                  ),
+                  labelText: 'Date of Birth',
+                  hintText: 'Select your date of birth',
+                  readOnly: true,
+                  onTap: _isEditing ? () => _selectDate(context) : null,
+                  validator: (value) {
+                    if (_selectedDate == null) {
+                      return 'Please select your date of birth';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                _buildAnimatedTextField(
+                  controller: _bioController,
+                  labelText: 'Bio',
+                  hintText: 'Tell us about yourself',
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 20),
+                if (_isEditing && !_showResetPassword)
+                  AnimatedBuilder(
+                    animation: _buttonSlideAnimation,
+                    builder: (context, child) {
+                      return Transform.translate(
+                        offset: Offset(0, _buttonSlideAnimation.value),
+                        child: FadeTransition(
+                          opacity: _textFieldFadeAnimation,
+                          child: ElevatedButton(
+                            onPressed: () {
+                              setState(() {
+                                _showResetPassword = true;
+                              });
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.teal,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text(
+                              'Reset Password',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                if (_isEditing && _showResetPassword)
+                  AnimatedBuilder(
+                    animation: _buttonSlideAnimation,
+                    builder: (context, child) {
+                      return Transform.translate(
+                        offset: Offset(0, _buttonSlideAnimation.value),
+                        child: FadeTransition(
+                          opacity: _textFieldFadeAnimation,
+                          child: Column(
+                            children: [
+                              const Text(
+                                'A password reset email will be sent to your email address.',
+                                style: TextStyle(fontSize: 14, color: Colors.grey),
+                              ),
+                              const SizedBox(height: 16),
+                              ElevatedButton(
+                                onPressed: _resetPassword,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.teal,
+                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Send Reset Email',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _showResetPassword = false;
+                                  });
+                                },
+                                child: const Text(
+                                  'Cancel',
+                                  style: TextStyle(color: Colors.teal),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                if (_isEditing) const SizedBox(height: 20),
+                if (_isEditing)
+                  AnimatedBuilder(
+                    animation: _buttonSlideAnimation,
+                    builder: (context, child) {
+                      return Transform.translate(
+                        offset: Offset(0, _buttonSlideAnimation.value),
+                        child: FadeTransition(
+                          opacity: _textFieldFadeAnimation,
+                          child: ElevatedButton(
+                            onPressed: _saveProfile,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.teal,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text(
+                              'Save Profile',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnimatedTextField({
+    required TextEditingController controller,
+    required String labelText,
+    required String hintText,
+    int maxLines = 1,
+    bool readOnly = false,
+    void Function()? onTap,
+    String? Function(String?)? validator,
+    Widget? suffixIcon,
+  }) {
+    return FadeTransition(
+      opacity: _textFieldFadeAnimation,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 6,
+              offset: Offset(0, 3),
+            ),
+          ],
+        ),
+        child: TextFormField(
+          controller: controller,
+          decoration: InputDecoration(
+            labelText: labelText,
+            hintText: hintText,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            suffixIcon: suffixIcon,
+          ),
+          enabled: _isEditing,
+          maxLines: maxLines,
+          readOnly: readOnly,
+          onTap: onTap,
+          validator: validator,
+        ),
+      ),
+    );
+  }
+}
+
+class MapPickerScreen extends StatefulWidget {
+  final Function(LatLng) onLocationSelected;
+
+  const MapPickerScreen({super.key, required this.onLocationSelected});
+
+  @override
+  State<MapPickerScreen> createState() => _MapPickerScreenState();
+}
+
+class _MapPickerScreenState extends State<MapPickerScreen> with SingleTickerProviderStateMixin {
+  final MapController _mapController = MapController();
+  final TextEditingController _searchController = TextEditingController();
+  LatLng? _selectedLocation;
+  LatLng _initialPosition = const LatLng(0, 0);
+  double _initialZoom = 2;
+  List<Map<String, dynamic>> _searchResults = [];
+  bool _isSearching = false;
+
+  // Animation controller and animations
+  late AnimationController _animationController;
+  late Animation<double> _searchBarFadeAnimation;
+  late Animation<double> _searchBarScaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize animation controller
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    );
+
+    // Search bar fade animation
+    _searchBarFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+    );
+
+    // Search bar scale animation
+    _searchBarScaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
+    );
+
+    // Start animations
+    _animationController.forward();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  Future<List<Map<String, dynamic>>> _searchLocation(String query) async {
+    if (query.isEmpty) {
+      setState(() {
+        _searchResults = [];
+      });
+      return [];
+    }
+
+    setState(() {
+      _isSearching = true;
+    });
+
+    try {
+      final response = await http.get(
+        Uri.parse(
+          'https://nominatim.openstreetmap.org/search?format=json&q=${Uri.encodeQueryComponent(query)}&addressdetails=1&limit=5',
+        ),
+        headers: {'User-Agent': 'MyFYPApp/1.0'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body) as List<dynamic>;
+        final results = data.map((item) => {
+          'display_name': item['display_name'] as String,
+          'lat': double.parse(item['lat'] as String),
+          'lon': double.parse(item['lon'] as String),
+        }).toList();
+
+        setState(() {
+          _searchResults = results;
+          if (results.isNotEmpty) {
+            _initialPosition = LatLng(results[0]['lat'] as double, results[0]['lon'] as double);
+            _initialZoom = 15;
+            _mapController.move(_initialPosition, _initialZoom);
+          }
+        });
+        return results;
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to search location')),
+        );
+        return [];
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error searching location: $e')),
+      );
+      return [];
+    } finally {
+      setState(() {
+        _isSearching = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Select Location'),
+        centerTitle: true,
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        actions: [
+          if (_selectedLocation != null)
+            IconButton(
+              icon: const Icon(Icons.check),
+              onPressed: () {
+                widget.onLocationSelected(_selectedLocation!);
+                Navigator.pop(context);
+              },
+            ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _initialPosition,
+              initialZoom: _initialZoom,
+              onTap: (tapPosition, point) {
+                setState(() {
+                  _selectedLocation = point;
+                });
+              },
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                subdomains: const ['a', 'b', 'c'],
+                userAgentPackageName: 'com.example.fyp',
+              ),
+              MarkerLayer(
+                markers: [
+                  // Markers for search results
+                  ..._searchResults.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final result = entry.value;
+                    return Marker(
+                      point: LatLng(result['lat'] as double, result['lon'] as double),
+                      width: 80,
+                      height: 80,
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _selectedLocation = LatLng(result['lat'] as double, result['lon'] as double);
+                          });
+                        },
+                        child: Icon(
+                          Icons.location_pin,
+                          color: Colors.blue,
+                          size: 40,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                  // Marker for user-selected location
+                  if (_selectedLocation != null)
+                    Marker(
+                      point: _selectedLocation!,
+                      width: 80,
+                      height: 80,
+                      child: const Icon(
+                        Icons.location_pin,
+                        color: Colors.red,
+                        size: 40,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          Positioned(
+            top: 10,
+            left: 10,
+            right: 10,
+            child: Column(
+              children: [
+                FadeTransition(
+                  opacity: _searchBarFadeAnimation,
+                  child: ScaleTransition(
+                    scale: _searchBarScaleAnimation,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _searchController,
+                              decoration: const InputDecoration(
+                                hintText: 'Search for a location (e.g., Kuala Lumpur)',
+                                border: InputBorder.none,
+                              ),
+                              onSubmitted: (value) => _searchLocation(value),
+                            ),
+                          ),
+                          IconButton(
+                            icon: _isSearching
+                                ? const CircularProgressIndicator(strokeWidth: 2)
+                                : const Icon(Icons.search, color: Colors.teal),
+                            onPressed: _isSearching
+                                ? null
+                                : () => _searchLocation(_searchController.text),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  color: Colors.black54,
+                  child: Text(
+                    _searchResults.isEmpty
+                        ? 'Search or pinch to zoom and drag to navigate. Tap to select a location.'
+                        : 'Tap a blue pin to select a searched location or tap the map to choose another.',
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
