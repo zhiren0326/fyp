@@ -86,7 +86,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 MaterialPageRoute(builder: (context) => const NotificationScreen()),
               );
             },
-
           )
         ],
       ),
@@ -118,15 +117,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
       ),
       body: _screens[_selectedIndex],
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (context) => const AddJobPage()),
-          );
-        },
-        backgroundColor: Colors.teal,
-        child: const Icon(Icons.add, size: 30),
-      ),
       bottomNavigationBar: BottomNavigationBar(
         items: const [
           BottomNavigationBarItem(
@@ -206,69 +196,75 @@ class AnimatedDrawer extends StatelessWidget {
       child: ListView(
         padding: EdgeInsets.zero,
         children: [
-          DrawerHeader(
-            decoration: const BoxDecoration(
-              color: Colors.teal,
-            ),
-            child: FutureBuilder<DocumentSnapshot>(
-              future: FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(FirebaseAuth.instance.currentUser?.uid)
-                  .collection('signupdetails')
-                  .doc('profile')
-                  .get(),
-              builder: (context, snapshot) {
-                print('Snapshot data: ${snapshot.data}'); // Debug print
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const CircularProgressIndicator(color: Colors.white);
-                }
-                if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
-                  print('Error or no data: ${snapshot.error}');
-                  return Column(
+          StreamBuilder<DocumentSnapshot>(
+            stream: FirebaseAuth.instance.currentUser != null
+                ? FirebaseFirestore.instance
+                .collection('users')
+                .doc(FirebaseAuth.instance.currentUser!.uid)
+                .collection('profiledetails')
+                .doc('profile')
+                .snapshots()
+                : const Stream.empty(),
+            builder: (context, snapshot) {
+              print('Snapshot data: ${snapshot.data?.data()}'); // Debug print
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const DrawerHeader(
+                  decoration: BoxDecoration(color: Colors.teal),
+                  child: Center(child: CircularProgressIndicator(color: Colors.white)),
+                );
+              }
+              if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
+                print('Error or no data: ${snapshot.error}');
+                final user = FirebaseAuth.instance.currentUser;
+                return DrawerHeader(
+                  decoration: const BoxDecoration(color: Colors.teal),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       CircleAvatar(
                         radius: 30,
                         backgroundImage: NetworkImage(
-                          FirebaseAuth.instance.currentUser?.photoURL ??
-                              'https://via.placeholder.com/150',
+                          user?.photoURL ?? 'https://via.placeholder.com/150',
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 10),
                       Text(
-                        FirebaseAuth.instance.currentUser?.displayName ?? 'User',
+                        user?.displayName ?? 'User',
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 15,
+                          fontSize: 18,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                       Text(
-                        FirebaseAuth.instance.currentUser?.email ?? '',
+                        user?.email ?? '',
                         style: const TextStyle(
                           color: Colors.white70,
-                          fontSize: 11,
+                          fontSize: 15,
                         ),
                       ),
                     ],
-                  );
-                }
-                final data = snapshot.data!.data() as Map<String, dynamic>;
-                print('Fetched data: $data'); // Debug print
-                return Column(
+                  ),
+                );
+              }
+              final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+              print('Fetched data: $data'); // Debug print
+              final user = FirebaseAuth.instance.currentUser;
+              final photoURL = data['photoURL'] ?? user?.photoURL ?? 'https://via.placeholder.com/150';
+              return DrawerHeader(
+                decoration: const BoxDecoration(color: Colors.teal),
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     CircleAvatar(
                       radius: 30,
-                      backgroundImage: NetworkImage(
-                        data['photoURL'] ??
-                            FirebaseAuth.instance.currentUser?.photoURL ??
-                            'https://via.placeholder.com/150',
-                      ),
+                      backgroundImage: photoURL.startsWith('assets/')
+                          ? AssetImage(photoURL) as ImageProvider
+                          : NetworkImage(photoURL),
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      data['name'] ?? 'User',
+                      data['name'] ?? user?.displayName ?? 'User',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 18,
@@ -276,16 +272,16 @@ class AnimatedDrawer extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      data['email'] ?? '',
+                      data['email'] ?? user?.email ?? '',
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 15,
                       ),
                     ),
                   ],
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
           ListTile(
             leading: CircleAvatar(

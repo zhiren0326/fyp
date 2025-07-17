@@ -58,10 +58,12 @@ class _SignupScreenState extends State<SignupScreen> {
         name: nameController.text.trim(),
       );
       if (result == "success") {
-        showSnackBar(context, 'Successfully signed up!');
+        // Show success message and navigate to LoginScreen after a delay
+        showSnackBar(context, 'Signup successful! Redirecting to login...');
+        await Future.delayed(const Duration(seconds: 2)); // Delay for 2 seconds to show message
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          MaterialPageRoute(builder: (context) => const LoginScreen()),
         );
       } else {
         showSnackBar(context, result);

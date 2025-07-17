@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 
@@ -17,13 +16,13 @@ class SkillTagScreen extends StatefulWidget {
 class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProviderStateMixin {
   final TextEditingController _skillController = TextEditingController();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance;
   final ImagePicker _picker = ImagePicker();
-  List<String> skills = [];
+  List<Map<String, dynamic>> skills = []; // Store skill, certificate base64, and icon name
   late AnimationController _animationController;
   late Animation<double> _textFieldScaleAnimation;
   late Animation<double> _textFieldFadeAnimation;
   late Animation<double> _fabScaleAnimation;
+  late Animation<double> _previewScaleAnimation;
   bool _isLoading = false;
   bool _isVerifying = false;
   String? _errorMessage;
@@ -31,7 +30,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
   String? _previewImagePath;
 
   // Replace with your Gemini API key (use environment variable in production)
-  static const String _geminiApiKey = 'AIzaSyA_1MwSsAjtD3LcO5W5cmADXrzAwC7dWII';
+  static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo';
 
   @override
   void initState() {
@@ -56,6 +55,11 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
 
     // FAB scale animation
     _fabScaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
+    );
+
+    // Preview image scale animation
+    _previewScaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
     );
 
@@ -87,8 +91,14 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
           .doc('user_skills')
           .get();
       if (snapshot.exists) {
+        final data = snapshot.data();
         setState(() {
-          skills = List<String>.from(snapshot.data()!['skills'] ?? []);
+          skills = List<Map<String, dynamic>>.from((data?['skills'] as List?)?.map((item) => {
+            'skill': item['skill'] ?? 'Unknown Skill',
+            'certificateBase64': item['certificateBase64'] ?? '',
+            'iconName': item['iconName'] ?? 'star',
+            'timestamp': item['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+          }) ?? []);
         });
       } else {
         await _firestore
@@ -168,8 +178,50 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
     }
   }
 
+  Future<String> _selectIconForSkill(String skill) async {
+    try {
+      final model = GenerativeModel(
+        model: 'gemini-1.5-flash',
+        apiKey: _geminiApiKey,
+      );
+
+      final prompt = TextPart(
+        'Given the skill "$skill", suggest the most suitable Flutter icon name from the Material Icons class (e.g., "code", "build", "star", "brush", "computer", "school", "work", "settings", "palette", "data_usage"). Return only the icon name as a single word or underscore-separated string (e.g., "code"). If no suitable icon is found, return "star".',
+      );
+
+      final response = await model.generateContent([
+        Content.text(prompt.text)
+      ]);
+
+      final iconName = response.text?.trim() ?? 'star';
+      // Validate icon name against iconMap
+      const iconMap = {
+        'code': Icons.code,
+        'build': Icons.build,
+        'star': Icons.star,
+        'brush': Icons.brush,
+        'computer': Icons.computer,
+        'school': Icons.school,
+        'work': Icons.work,
+        'settings': Icons.settings,
+        'palette': Icons.palette,
+        'data_usage': Icons.data_usage,
+      };
+      if (iconName.isEmpty || !iconMap.containsKey(iconName)) {
+        return 'star'; // Fallback icon
+      }
+      return iconName;
+    } catch (e) {
+      print('Icon Selection Error: $e');
+      setState(() {
+        _errorMessage = 'Error selecting icon: $e';
+      });
+      return 'star'; // Fallback icon
+    }
+  }
+
   Future<void> _addSkill(String skill, File? certificateImage) async {
-    if (skill.isEmpty || skills.contains(skill)) {
+    if (skill.isEmpty || skills.any((s) => s['skill'] == skill)) {
       setState(() {
         _errorMessage = skill.isEmpty ? 'Please enter a skill' : 'Skill already exists';
       });
@@ -201,7 +253,8 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
     final verificationResult = await _verifyCertificateWithGemini(skill, certificateImage);
     print('Verification Result: $verificationResult'); // Debug log
     if (verificationResult['isValid'] as bool) {
-      await _addSkillConfirmed(skill, certificateImage);
+      final iconName = await _selectIconForSkill(skill);
+      await _addSkillConfirmed(skill, certificateImage, iconName);
     } else {
       setState(() {
         _isLoading = false;
@@ -244,27 +297,29 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
       if (action == 'retry') {
         await _addSkill(skill, certificateImage); // Retry the verification
       } else if (action == 'prove') {
-        await _addSkillConfirmed(skill, certificateImage); // Allow manual addition
+        final iconName = await _selectIconForSkill(skill);
+        await _addSkillConfirmed(skill, certificateImage, iconName);
       }
     }
   }
 
-  Future<void> _addSkillConfirmed(String skill, File certificateImage) async {
+  Future<void> _addSkillConfirmed(String skill, File certificateImage, String iconName) async {
     try {
-      // Upload certificate to Firebase Storage
       final user = FirebaseAuth.instance.currentUser!;
-      final storageRef = _storage
-          .ref()
-          .child('users')
-          .child(user.uid)
-          .child('certificates')
-          .child('${DateTime.now().millisecondsSinceEpoch}.jpg');
-      await storageRef.putFile(certificateImage);
-      final certificateUrl = await storageRef.getDownloadURL();
+      // Convert certificate image to base64
+      final bytes = await certificateImage.readAsBytes();
+      final certificateBase64 = base64Encode(bytes);
 
-      // Add skill to Firestore
+      // Store skill, certificate, and icon name in Firestore
       setState(() {
-        skills.add(skill);
+        skills.add({
+          'skill': skill,
+          'certificateBase64': certificateBase64,
+          'iconName': iconName,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        _animationController.reset();
+        _animationController.forward(); // Restart animation for new item
       });
       await _firestore
           .collection('users')
@@ -272,10 +327,14 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
           .collection('skills')
           .doc('user_skills')
           .set({
-        'skills': skills,
-        'certificates': FieldValue.arrayUnion([
-          {'skill': skill, 'certificateUrl': certificateUrl, 'timestamp': FieldValue.serverTimestamp()}
-        ]),
+        'skills': skills
+            .map((s) => {
+          'skill': s['skill'] ?? 'Unknown Skill',
+          'certificateBase64': s['certificateBase64'] ?? '',
+          'iconName': s['iconName'] ?? 'star',
+          'timestamp': s['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+        })
+            .toList(),
       }, SetOptions(merge: true));
 
       setState(() {
@@ -289,7 +348,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
       );
     } catch (e) {
       setState(() {
-        if (skills.contains(skill)) skills.remove(skill); // Revert on error
+        skills.removeWhere((s) => s['skill'] == skill); // Revert on error
         _errorMessage = 'Error adding skill: $e';
         _isLoading = false;
       });
@@ -298,6 +357,26 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
 
   Future<void> _deleteSkill(int index) async {
     final skill = skills[index];
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Skill'),
+        content: Text('Are you sure you want to delete the skill "${skill['skill']}"? This will also remove the associated certificate and icon.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.teal)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     setState(() {
       skills.removeAt(index);
     });
@@ -318,8 +397,18 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
           .collection('skills')
           .doc('user_skills')
           .set({
-        'skills': skills,
+        'skills': skills
+            .map((s) => {
+          'skill': s['skill'] ?? 'Unknown Skill',
+          'certificateBase64': s['certificateBase64'] ?? '',
+          'iconName': s['iconName'] ?? 'star',
+          'timestamp': s['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+        })
+            .toList(),
       }, SetOptions(merge: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Skill deleted successfully')),
+      );
     } catch (e) {
       setState(() {
         skills.insert(index, skill);
@@ -335,6 +424,8 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
         setState(() {
           _previewImagePath = pickedFile.path;
           _selectedImage = File(pickedFile.path);
+          _animationController.reset();
+          _animationController.forward(); // Restart animation for preview
         });
         final confirmed = await showDialog<bool>(
           context: context,
@@ -344,11 +435,17 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Image.file(
-                    File(_previewImagePath!),
-                    height: 200,
-                    fit: BoxFit.contain,
-                  ),
+                  if (_previewImagePath != null)
+                    ScaleTransition(
+                      scale: _previewScaleAnimation,
+                      child: Image.file(
+                        File(_previewImagePath!),
+                        height: 200,
+                        fit: BoxFit.contain,
+                      ),
+                    )
+                  else
+                    const Text('No preview available'),
                   const SizedBox(height: 16),
                   const Text('Is this the correct certificate image?'),
                 ],
@@ -385,6 +482,45 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
     }
   }
 
+  void _viewCertificate(String base64Image) {
+    final bytes = base64Decode(base64Image);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Certificate'),
+        content: SingleChildScrollView(
+          child: Image.memory(
+            bytes,
+            fit: BoxFit.contain,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close', style: TextStyle(color: Colors.teal)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _getIconData(String iconName) {
+    // Map string icon names to IconData
+    const iconMap = {
+      'code': Icons.code,
+      'build': Icons.build,
+      'star': Icons.star,
+      'brush': Icons.brush,
+      'computer': Icons.computer,
+      'school': Icons.school,
+      'work': Icons.work,
+      'settings': Icons.settings,
+      'palette': Icons.palette,
+      'data_usage': Icons.data_usage,
+    };
+    return iconMap[iconName] ?? Icons.star; // Fallback to star icon
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -408,7 +544,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Text(
-                  _errorMessage!,
+                  _errorMessage ?? 'Unknown error',
                   style: const TextStyle(color: Colors.red),
                 ),
               ),
@@ -427,10 +563,15 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
-                    Image.file(
-                      File(_previewImagePath!),
-                      height: 150,
-                      fit: BoxFit.contain,
+                    ScaleTransition(
+                      scale: _previewScaleAnimation,
+                      child: _previewImagePath != null
+                          ? Image.file(
+                        File(_previewImagePath!),
+                        height: 150,
+                        fit: BoxFit.contain,
+                      )
+                          : const Text('No preview available'),
                     ),
                   ],
                 ),
@@ -512,39 +653,68 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
               child: ListView.builder(
                 itemCount: skills.length,
                 itemBuilder: (context, index) {
-                  return SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(1, 0),
-                      end: Offset.zero,
-                    ).animate(
-                      CurvedAnimation(
-                        parent: _animationController,
-                        curve: Interval(
-                          (index / skills.length) * 0.5,
-                          1.0,
-                          curve: Curves.easeOut,
-                        ),
+                  final skillData = skills[index];
+                  return FadeTransition(
+                    opacity: CurvedAnimation(
+                      parent: _animationController,
+                      curve: Interval(
+                        (index / skills.length) * 0.5,
+                        1.0,
+                        curve: Curves.easeIn,
                       ),
                     ),
-                    child: Card(
-                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: ListTile(
-                        title: Text(
-                          skills[index],
-                          style: const TextStyle(fontSize: 16),
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(1, 0),
+                        end: Offset.zero,
+                      ).animate(
+                        CurvedAnimation(
+                          parent: _animationController,
+                          curve: Interval(
+                            (index / skills.length) * 0.5,
+                            1.0,
+                            curve: Curves.easeOut,
+                          ),
                         ),
-                        trailing: GestureDetector(
-                          onTap: () => _deleteSkill(index),
-                          child: AnimatedScale(
-                            scale: 1.0,
-                            duration: const Duration(milliseconds: 200),
-                            child: const Icon(
-                              Icons.delete,
-                              color: Colors.redAccent,
+                      ),
+                      child: Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        elevation: 2,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ListTile(
+                          leading: ScaleTransition(
+                            scale: CurvedAnimation(
+                              parent: _animationController,
+                              curve: Curves.easeOutBack,
+                            ),
+                            child: Icon(
+                              _getIconData(skillData['iconName'] ?? 'star'),
+                              size: 30,
+                              color: Colors.teal,
+                            ),
+                          ),
+                          title: Text(
+                            skillData['skill'] ?? 'Unknown Skill',
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                          subtitle: GestureDetector(
+                            onTap: () => _viewCertificate(skillData['certificateBase64'] ?? ''),
+                            child: const Text(
+                              'View Certificate',
+                              style: TextStyle(color: Colors.teal, decoration: TextDecoration.underline),
+                            ),
+                          ),
+                          trailing: GestureDetector(
+                            onTap: () => _deleteSkill(index),
+                            child: AnimatedScale(
+                              scale: 1.0,
+                              duration: const Duration(milliseconds: 200),
+                              child: const Icon(
+                                Icons.delete,
+                                color: Colors.redAccent,
+                              ),
                             ),
                           ),
                         ),
