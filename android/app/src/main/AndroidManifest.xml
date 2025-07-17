@@ -8,6 +8,9 @@
         android:label="fyp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyDv4rcdx6Jg7LRZWwg85o12E4X9oFmFXg0"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

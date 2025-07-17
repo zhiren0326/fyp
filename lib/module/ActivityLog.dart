@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 
 class ActivityLogScreen extends StatefulWidget {
@@ -24,19 +26,74 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     });
   }
 
+  void acceptJob(String jobId) {
+    FirebaseFirestore.instance.collection('jobs').doc(jobId).update({
+      'isAccepted': true,
+      'acceptedBy': FirebaseAuth.instance.currentUser!.uid,
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
-      body: const Center(
-        child: Text(
-          "Activity Logs Screen",
-          style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
-        ),
+      appBar: AppBar(
+        title: const Text("Activity Logs"),
+        backgroundColor: Colors.teal,
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('jobs')
+            .orderBy('postedAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(child: Text("No jobs available."));
+          }
+
+          final jobs = snapshot.data!.docs;
+
+          return ListView.builder(
+            itemCount: jobs.length,
+            itemBuilder: (context, index) {
+              final job = jobs[index];
+              final data = job.data() as Map<String, dynamic>;
+              final isOwner = data['postedBy'] == currentUser!.uid;
+              final isAccepted = data['isAccepted'] == true;
+
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: ListTile(
+                  title: Text(data['title'] ?? ''),
+                  subtitle: Text(data['description'] ?? ''),
+                  trailing: isOwner
+                      ? IconButton(
+                    icon: const Icon(Icons.edit, color: Colors.orange),
+                    onPressed: () {
+                      // Navigate to edit page (to implement)
+                    },
+                  )
+                      : isAccepted
+                      ? const Text("Taken", style: TextStyle(color: Colors.grey))
+                      : ElevatedButton(
+                    onPressed: () => acceptJob(job.id),
+                    child: const Text("Accept"),
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
       floatingActionButton: Tooltip(
         message: 'Tap to create a new task',
-        waitDuration: Duration(milliseconds: 500),
-        showDuration: Duration(seconds: 2),
+        waitDuration: const Duration(milliseconds: 500),
+        showDuration: const Duration(seconds: 2),
         child: FloatingActionButton(
           onPressed: () {
             Navigator.of(context).push(

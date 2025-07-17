@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:fyp/module/ActivityLog.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'LocationPickerPage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class AddJobPage extends StatefulWidget {
   const AddJobPage({super.key});
@@ -36,6 +38,20 @@ class _AddJobPageState extends State<AddJobPage> {
   final List<String> employmentOptions = ["Full-time", "Part-time", "Contract", "Temporary", "Internship"];
 
   Future<void> _submitJob() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    if (!_isFormValid()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please fill out all required fields.'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return; // Prevent submission
+    }
+
     final jobData = <String, dynamic>{
       'jobPosition': controllers['Job position*']!.text,
       'workplaceType': controllers['Type of workplace*']!.text,
@@ -52,6 +68,8 @@ class _AddJobPageState extends State<AddJobPage> {
       'recurringTasks': isRecurring ? controllers['Recurring Tasks']!.text : null,
       'isShortTerm': isShortTerm,
       'postedAt': Timestamp.now(),
+      'postedBy': currentUser.uid,
+      'acceptedBy': null,
     };
 
     try {
@@ -75,7 +93,10 @@ class _AddJobPageState extends State<AddJobPage> {
               child: const Text('Add Another'),
             ),
             TextButton(
-              onPressed: () => Navigator.popUntil(context, (route) => route.isFirst),
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.pop(context);
+              },
               child: const Text('Go Back'),
             ),
           ],
@@ -258,7 +279,13 @@ class _AddJobPageState extends State<AddJobPage> {
 
   bool _isFormValid() {
     return controllers.entries
-        .where((entry) => entry.key.endsWith('*'))
+        .where((entry) {
+      final isRequired = entry.key.endsWith('*');
+      final isTimeField = entry.key == 'Start time*' || entry.key == 'End time*';
+      if (!isRequired) return false;
+      if (!isShortTerm && isTimeField) return false;
+      return true;
+    })
         .every((entry) => entry.value.text.trim().isNotEmpty);
   }
 
@@ -300,11 +327,11 @@ class _AddJobPageState extends State<AddJobPage> {
         ),
         actions: [
           TextButton(
-            onPressed: _isFormValid() ? _submitJob : null,
-            child: Text(
+            onPressed: _submitJob,
+            child: const Text(
               'Post',
               style: TextStyle(
-                color: _isFormValid() ? const Color(0xFFFF8A00) : Colors.grey,
+                color: Color(0xFFFF8A00),
                 fontWeight: FontWeight.bold,
               ),
             ),
