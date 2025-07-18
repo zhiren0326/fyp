@@ -1,7 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import 'package:fyp/Notification%20Module/NotificationScreen.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Profile.dart';
@@ -25,10 +24,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   static const List<Widget> _screens = [
     ActivityLogScreen(),
-    ProfileScreen(),
     SkillTagScreen(),
     ReportScreen(),
     SettingsScreen(),
+    ProfileScreen(),
   ];
 
   @override
@@ -125,24 +124,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             label: 'Home',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.person),
+            icon: Icon(Icons.local_offer),
             activeIcon: AnimatedNavIcon(icon: Icons.person),
-            label: 'Profile',
+            label: 'Activity',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.local_offer),
+            icon: Icon(Icons.chat),
             activeIcon: AnimatedNavIcon(icon: Icons.local_offer),
-            label: 'Activity',
+            label: 'Chat',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.assessment),
             activeIcon: AnimatedNavIcon(icon: Icons.assessment),
-            label: 'Report',
+            label: 'Reward',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
+            icon: Icon(Icons.person),
             activeIcon: AnimatedNavIcon(icon: Icons.settings),
-            label: 'Settings',
+            label: 'Account',
           )
         ],
         currentIndex: _selectedIndex,

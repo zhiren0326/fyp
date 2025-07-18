@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:fyp/module/SkillTags.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -28,6 +30,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   String? _errorMessage;
   String? _photoURL;
   bool _hasSetProfilePicture = false;
+  List<Map<String, dynamic>> _skills = []; // Store fetched skills
 
   // Animation controller and animations
   late AnimationController _animationController;
@@ -98,6 +101,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           .doc('profile')
           .get();
 
+      final skillsDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('skills')
+          .doc('user_skills')
+          .get();
+
       if (fsDoc.exists) {
         final data = fsDoc.data()!;
         setState(() {
@@ -112,9 +122,22 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           _hasSetProfilePicture = _photoURL != null;
         });
       }
+
+      if (skillsDoc.exists) {
+        final data = skillsDoc.data()!;
+        setState(() {
+          _skills = List<Map<String, dynamic>>.from((data['skills'] as List?)?.map((item) => {
+            'skill': item['skill'] ?? 'Unknown Skill',
+            'certificateBase64': item['certificateBase64'] ?? '',
+            'iconName': item['iconName'] ?? 'star',
+            'timestamp': item['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+            'verified': item['verified'] ?? false,
+          }) ?? []);
+        });
+      }
     } catch (e) {
       setState(() {
-        _errorMessage = 'Error fetching profile: $e';
+        _errorMessage = 'Error fetching profile or skills: $e';
       });
     }
   }
@@ -348,276 +371,447 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile'),
-        centerTitle: true,
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
+  void _navigateToSkillTagScreen() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const SkillTagScreen()),
+    );
+  }
+
+  void _viewCertificate(String? base64Image, String skillName) {
+    if (base64Image == null || base64Image.isEmpty) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('No Certificate'),
+          content: Text('No certificate available for the skill "$skillName".'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK', style: TextStyle(color: Colors.teal)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final bytes = base64Decode(base64Image);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Certificate for $skillName'),
+        content: SingleChildScrollView(
+          child: Image.memory(
+            bytes,
+            fit: BoxFit.contain,
+          ),
+        ),
         actions: [
-          IconButton(
-            icon: Icon(_isEditing ? Icons.close : Icons.edit),
-            onPressed: () {
-              setState(() {
-                _isEditing = !_isEditing;
-                _errorMessage = null;
-                _showResetPassword = false;
-                _animationController.reset();
-                _animationController.forward();
-              });
-            },
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close', style: TextStyle(color: Colors.teal)),
           ),
         ],
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Colors.teal.shade50, Colors.white],
+            colors: [Color(0xFFB2DFDB), Colors.white],
           ),
         ),
         child: Padding(
           padding: const EdgeInsets.all(16.0),
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : Form(
-            key: _formKey,
-            child: ListView(
-              children: [
-                if (_errorMessage != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16.0),
-                    child: Text(
-                      _errorMessage!,
-                      style: const TextStyle(color: Colors.red),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween, // Spreads children, keeping IconButton at the end
+                children: [
+                  // Spacer to push the Text to the center
+                  Expanded(child: Container()), // Empty container to balance the left side
+                  Text(
+                    'Profile',
+                    style: GoogleFonts.poppins(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
                     ),
                   ),
-                Center(
-                  child: ScaleTransition(
-                    scale: _profilePictureScaleAnimation,
-                    child: GestureDetector(
-                      onTap: _isEditing && !_hasSetProfilePicture ? _selectProfilePicture : null,
-                      child: Stack(
-                        alignment: Alignment.bottomRight,
-                        children: [
-                          CircleAvatar(
-                            radius: 50,
-                            backgroundImage: _photoURL != null
-                                ? AssetImage(_photoURL!)
-                                : const NetworkImage('https://via.placeholder.com/150')
-                            as ImageProvider,
-                          ),
-                          if (_isEditing && !_hasSetProfilePicture)
-                            CircleAvatar(
-                              radius: 15,
-                              backgroundColor: Colors.teal,
-                              child: const Icon(
-                                Icons.camera_alt,
-                                size: 18,
-                                color: Colors.white,
-                              ),
-                            ),
-                        ],
+                  // Spacer to balance the right side, ensuring Text is centered
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight, // Align IconButton to the far right
+                      child: IconButton(
+                        icon: Icon(_isEditing ? Icons.close : Icons.edit, color: Colors.teal),
+                        onPressed: () {
+                          setState(() {
+                            _isEditing = !_isEditing;
+                            _errorMessage = null;
+                            _showResetPassword = false;
+                            _animationController.reset();
+                            _animationController.forward();
+                          });
+                        },
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                _buildAnimatedTextField(
-                  controller: _nameController,
-                  labelText: 'Name',
-                  hintText: 'Enter your full name',
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter your name';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildAnimatedTextField(
-                  controller: _emailController,
-                  labelText: 'Email',
-                  hintText: 'Enter your email address',
-                  validator: (value) {
-                    if (value == null || !value.contains('@')) {
-                      return 'Please enter a valid email';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildAnimatedTextField(
-                  controller: _phoneController,
-                  labelText: 'Phone Number',
-                  hintText: 'Enter your phone number (e.g., +1234567890)',
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter your phone number';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildAnimatedTextField(
-                  controller: _icController,
-                  labelText: 'IC Number',
-                  hintText: 'Enter your identification number',
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter your IC number';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildAnimatedTextField(
-                  controller: _addressController,
-                  labelText: 'Address',
-                  hintText: 'Select or enter your address',
-                  maxLines: 2,
-                  suffixIcon: _isEditing
-                      ? IconButton(
-                    icon: const Icon(Icons.map, color: Colors.teal),
-                    onPressed: _selectAddress,
-                  )
-                      : null,
-                ),
-                const SizedBox(height: 16),
-                _buildAnimatedTextField(
-                  controller: TextEditingController(
-                    text: _selectedDate != null
-                        ? '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}'
-                        : '',
-                  ),
-                  labelText: 'Date of Birth',
-                  hintText: 'Select your date of birth',
-                  readOnly: true,
-                  onTap: _isEditing ? () => _selectDate(context) : null,
-                  validator: (value) {
-                    if (_selectedDate == null) {
-                      return 'Please select your date of birth';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildAnimatedTextField(
-                  controller: _bioController,
-                  labelText: 'Bio',
-                  hintText: 'Tell us about yourself',
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 20),
-                if (_isEditing && !_showResetPassword)
-                  AnimatedBuilder(
-                    animation: _buttonSlideAnimation,
-                    builder: (context, child) {
-                      return Transform.translate(
-                        offset: Offset(0, _buttonSlideAnimation.value),
-                        child: FadeTransition(
-                          opacity: _textFieldFadeAnimation,
-                          child: ElevatedButton(
-                            onPressed: () {
-                              setState(() {
-                                _showResetPassword = true;
-                              });
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.teal,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: const Text(
-                              'Reset Password',
-                              style: TextStyle(color: Colors.white),
+                ],
+              ),
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : Form(
+                  key: _formKey,
+                  child: ListView(
+                    children: [
+                      if (_errorMessage != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 16.0),
+                          child: Text(
+                            _errorMessage!,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      Center(
+                        child: ScaleTransition(
+                          scale: _profilePictureScaleAnimation,
+                          child: GestureDetector(
+                            onTap: _isEditing && !_hasSetProfilePicture ? _selectProfilePicture : null,
+                            child: Stack(
+                              alignment: Alignment.bottomRight,
+                              children: [
+                                CircleAvatar(
+                                  radius: 50,
+                                  backgroundImage: _photoURL != null
+                                      ? AssetImage(_photoURL!)
+                                      : const NetworkImage('https://via.placeholder.com/150')
+                                  as ImageProvider,
+                                ),
+                                if (_isEditing && !_hasSetProfilePicture)
+                                  CircleAvatar(
+                                    radius: 15,
+                                    backgroundColor: Colors.teal,
+                                    child: const Icon(
+                                      Icons.camera_alt,
+                                      size: 18,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ),
-                      );
-                    },
-                  ),
-                if (_isEditing && _showResetPassword)
-                  AnimatedBuilder(
-                    animation: _buttonSlideAnimation,
-                    builder: (context, child) {
-                      return Transform.translate(
-                        offset: Offset(0, _buttonSlideAnimation.value),
-                        child: FadeTransition(
-                          opacity: _textFieldFadeAnimation,
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnimatedTextField(
+                        controller: _nameController,
+                        labelText: 'Name',
+                        hintText: 'Enter your full name',
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your name';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnimatedTextField(
+                        controller: _emailController,
+                        labelText: 'Email',
+                        hintText: 'Enter your email address',
+                        validator: (value) {
+                          if (value == null || !value.contains('@')) {
+                            return 'Please enter a valid email';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnimatedTextField(
+                        controller: _phoneController,
+                        labelText: 'Phone Number',
+                        hintText: 'Enter your phone number (e.g., +1234567890)',
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your phone number';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnimatedTextField(
+                        controller: _icController,
+                        labelText: 'IC Number',
+                        hintText: 'Enter your identification number',
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your IC number';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnimatedTextField(
+                        controller: _addressController,
+                        labelText: 'Address',
+                        hintText: 'Select or enter your address',
+                        maxLines: 2,
+                        suffixIcon: _isEditing
+                            ? IconButton(
+                          icon: const Icon(Icons.map, color: Colors.teal),
+                          onPressed: _selectAddress,
+                        )
+                            : null,
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnimatedTextField(
+                        controller: TextEditingController(
+                          text: _selectedDate != null
+                              ? '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}'
+                              : '',
+                        ),
+                        labelText: 'Date of Birth',
+                        hintText: 'Select your date of birth',
+                        readOnly: true,
+                        onTap: _isEditing ? () => _selectDate(context) : null,
+                        validator: (value) {
+                          if (_selectedDate == null) {
+                            return 'Please select your date of birth';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnimatedTextField(
+                        controller: _bioController,
+                        labelText: 'Bio',
+                        hintText: 'Tell us about yourself',
+                        maxLines: 3,
+                      ),
+                      const SizedBox(height: 16),
+                      FadeTransition(
+                        opacity: _textFieldFadeAnimation,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 6,
+                                offset: Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          padding: const EdgeInsets.all(16.0),
                           child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Text(
-                                'A password reset email will be sent to your email address.',
-                                style: TextStyle(fontSize: 14, color: Colors.grey),
-                              ),
-                              const SizedBox(height: 16),
-                              ElevatedButton(
-                                onPressed: _resetPassword,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.teal,
-                                  padding: const EdgeInsets.symmetric(vertical: 16),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text(
-                                  'Send Reset Email',
-                                  style: TextStyle(color: Colors.white),
+                                'Skills',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.teal,
                                 ),
                               ),
-                              const SizedBox(height: 16),
+                              const SizedBox(height: 8),
+                              _skills.isEmpty
+                                  ? const Text(
+                                'No skills added. Go to Skills Tags to add skills.',
+                                style: TextStyle(color: Colors.grey),
+                              )
+                                  : Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: _skills.map((skillData) {
+                                  return GestureDetector(
+                                    onTap: () => _viewCertificate(
+                                      skillData['certificateBase64'],
+                                      skillData['skill'],
+                                    ),
+                                    child: Chip(
+                                      label: Text(skillData['skill']),
+                                      avatar: Stack(
+                                        children: [
+                                          Icon(
+                                            _getIconData(skillData['iconName'] ?? 'star'),
+                                            color: Colors.teal,
+                                          ),
+                                          if (skillData['verified'] == true)
+                                            Positioned(
+                                              right: 0,
+                                              bottom: 0,
+                                              child: Icon(
+                                                Icons.verified,
+                                                size: 16,
+                                                color: Colors.blue,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      backgroundColor: Colors.teal.shade50,
+                                      labelStyle: const TextStyle(color: Colors.teal),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                              const SizedBox(height: 8),
                               TextButton(
                                 onPressed: () {
-                                  setState(() {
-                                    _showResetPassword = false;
-                                  });
+                                  showDialog(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      title: const Text('Manage Skills'),
+                                      content: const Text(
+                                          'To add or remove skills, please go to the Skills Tags section.'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(context),
+                                          child: const Text('Cancel',
+                                              style: TextStyle(color: Colors.teal)),
+                                        ),
+                                        TextButton(
+                                          onPressed: () {
+                                            Navigator.pop(context);
+                                            _navigateToSkillTagScreen();
+                                          },
+                                          child: const Text('Go to Skills Tags',
+                                              style: TextStyle(color: Colors.teal)),
+                                        ),
+                                      ],
+                                    ),
+                                  );
                                 },
                                 child: const Text(
-                                  'Cancel',
-                                  style: TextStyle(color: Colors.teal),
+                                  'Manage Skills',
+                                  style: TextStyle(
+                                    color: Colors.teal,
+                                    decoration: TextDecoration.underline,
+                                  ),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      );
-                    },
-                  ),
-                if (_isEditing) const SizedBox(height: 20),
-                if (_isEditing)
-                  AnimatedBuilder(
-                    animation: _buttonSlideAnimation,
-                    builder: (context, child) {
-                      return Transform.translate(
-                        offset: Offset(0, _buttonSlideAnimation.value),
-                        child: FadeTransition(
-                          opacity: _textFieldFadeAnimation,
-                          child: ElevatedButton(
-                            onPressed: _saveProfile,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.teal,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                      ),
+                      const SizedBox(height: 20),
+                      if (_isEditing && !_showResetPassword)
+                        AnimatedBuilder(
+                          animation: _buttonSlideAnimation,
+                          builder: (context, child) {
+                            return Transform.translate(
+                              offset: Offset(0, _buttonSlideAnimation.value),
+                              child: FadeTransition(
+                                opacity: _textFieldFadeAnimation,
+                                child: ElevatedButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      _showResetPassword = true;
+                                    });
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.teal,
+                                    padding: const EdgeInsets.symmetric(vertical: 16),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'Reset Password',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                ),
                               ),
-                            ),
-                            child: const Text(
-                              'Save Profile',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                          ),
+                            );
+                          },
                         ),
-                      );
-                    },
+                      if (_isEditing && _showResetPassword)
+                        AnimatedBuilder(
+                          animation: _buttonSlideAnimation,
+                          builder: (context, child) {
+                            return Transform.translate(
+                              offset: Offset(0, _buttonSlideAnimation.value),
+                              child: FadeTransition(
+                                opacity: _textFieldFadeAnimation,
+                                child: Column(
+                                  children: [
+                                    const Text(
+                                      'A password reset email will be sent to your email address.',
+                                      style: TextStyle(fontSize: 14, color: Colors.grey),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    ElevatedButton(
+                                      onPressed: _resetPassword,
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.teal,
+                                        padding: const EdgeInsets.symmetric(vertical: 16),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                      ),
+                                      child: const Text(
+                                        'Send Reset Email',
+                                        style: TextStyle(color: Colors.white),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    TextButton(
+                                      onPressed: () {
+                                        setState(() {
+                                          _showResetPassword = false;
+                                        });
+                                      },
+                                      child: const Text(
+                                        'Cancel',
+                                        style: TextStyle(color: Colors.teal),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      if (_isEditing) const SizedBox(height: 20),
+                      if (_isEditing)
+                        AnimatedBuilder(
+                          animation: _buttonSlideAnimation,
+                          builder: (context, child) {
+                            return Transform.translate(
+                              offset: Offset(0, _buttonSlideAnimation.value),
+                              child: FadeTransition(
+                                opacity: _textFieldFadeAnimation,
+                                child: ElevatedButton(
+                                  onPressed: _saveProfile,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.teal,
+                                    padding: const EdgeInsets.symmetric(vertical: 16),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'Save Profile',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                    ],
                   ),
-              ],
-            ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -668,6 +862,23 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
         ),
       ),
     );
+  }
+
+  IconData _getIconData(String iconName) {
+    // Map string icon names to IconData
+    const iconMap = {
+      'code': Icons.code,
+      'build': Icons.build,
+      'star': Icons.star,
+      'brush': Icons.brush,
+      'computer': Icons.computer,
+      'school': Icons.school,
+      'work': Icons.work,
+      'settings': Icons.settings,
+      'palette': Icons.palette,
+      'data_usage': Icons.data_usage,
+    };
+    return iconMap[iconName] ?? Icons.star; // Fallback to star
   }
 }
 

@@ -39,8 +39,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Activity Logs"),
-        backgroundColor: Colors.teal,
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance

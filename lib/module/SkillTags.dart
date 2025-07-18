@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 
 class SkillTagScreen extends StatefulWidget {
@@ -23,6 +24,8 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
   late Animation<double> _textFieldFadeAnimation;
   late Animation<double> _fabScaleAnimation;
   late Animation<double> _previewScaleAnimation;
+  late Animation<double> _titleFadeAnimation;
+  late Animation<double> _titleScaleAnimation;
   bool _isLoading = false;
   bool _isVerifying = false;
   String? _errorMessage;
@@ -63,6 +66,16 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
       CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
     );
 
+    // Title fade animation
+    _titleFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+    );
+
+    // Title scale animation
+    _titleScaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
+    );
+
     // Start animations
     _animationController.forward();
   }
@@ -98,6 +111,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
             'certificateBase64': item['certificateBase64'] ?? '',
             'iconName': item['iconName'] ?? 'star',
             'timestamp': item['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+            'verified': item['verified'] ?? false,
           }) ?? []);
         });
       } else {
@@ -220,17 +234,10 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
     }
   }
 
-  Future<void> _addSkill(String skill, File? certificateImage) async {
+  Future<void> _addSkill(String skill, File? certificateImage, {bool requiresVerification = true}) async {
     if (skill.isEmpty || skills.any((s) => s['skill'] == skill)) {
       setState(() {
         _errorMessage = skill.isEmpty ? 'Please enter a skill' : 'Skill already exists';
-      });
-      return;
-    }
-
-    if (certificateImage == null) {
-      setState(() {
-        _errorMessage = 'Please upload or scan a certificate';
       });
       return;
     }
@@ -249,74 +256,98 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
       return;
     }
 
-    // Verify certificate with Gemini
-    final verificationResult = await _verifyCertificateWithGemini(skill, certificateImage);
-    print('Verification Result: $verificationResult'); // Debug log
-    if (verificationResult['isValid'] as bool) {
-      final iconName = await _selectIconForSkill(skill);
-      await _addSkillConfirmed(skill, certificateImage, iconName);
-    } else {
+    if (requiresVerification && certificateImage == null) {
       setState(() {
+        _errorMessage = 'Please upload or scan a certificate';
         _isLoading = false;
-        _errorMessage = verificationResult['reason'] as String;
       });
-      // Show dialog to allow retry or manual addition
-      final action = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Verification Failed'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('The certificate verification failed: ${_errorMessage ?? 'Unknown error'}.'),
-                const SizedBox(height: 8),
-                Text('Extracted Text: ${(verificationResult['extractedText'] as String).isEmpty ? 'No text extracted' : verificationResult['extractedText'] as String}'),
-                const SizedBox(height: 8),
-                const Text('Would you like to retry or prove the certificate?'),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'cancel'),
-              child: const Text('Cancel', style: TextStyle(color: Colors.teal)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'retry'),
-              child: const Text('Retry', style: TextStyle(color: Colors.teal)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'prove'),
-              child: const Text('Prove Certificate', style: TextStyle(color: Colors.teal)),
-            ),
-          ],
-        ),
-      );
-      if (action == 'retry') {
-        await _addSkill(skill, certificateImage); // Retry the verification
-      } else if (action == 'prove') {
+      return;
+    }
+
+    // Verify certificate with Gemini if required
+    if (requiresVerification && certificateImage != null) {
+      final verificationResult = await _verifyCertificateWithGemini(skill, certificateImage);
+      print('Verification Result: $verificationResult'); // Debug log
+      if (verificationResult['isValid'] as bool) {
         final iconName = await _selectIconForSkill(skill);
-        await _addSkillConfirmed(skill, certificateImage, iconName);
+        await _addSkillConfirmed(skill, certificateImage, iconName, verified: true);
+      } else {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = verificationResult['reason'] as String;
+        });
+        // Show dialog to allow retry or manual addition
+        final action = await showDialog<String>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Verification Failed'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('The certificate verification failed: ${_errorMessage ?? 'Unknown error'}.'),
+                  const SizedBox(height: 8),
+                  Text('Extracted Text: ${(verificationResult['extractedText'] as String).isEmpty ? 'No text extracted' : verificationResult['extractedText'] as String}'),
+                  const SizedBox(height: 8),
+                  const Text('Would you like to retry, prove the certificate, or add without verification?'),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, 'cancel'),
+                child: const Text('Cancel', style: TextStyle(color: Colors.teal)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, 'retry'),
+                child: const Text('Retry', style: TextStyle(color: Colors.teal)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, 'prove'),
+                child: const Text('Prove Certificate', style: TextStyle(color: Colors.teal)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, 'add_without_verification'),
+                child: const Text('Add Without Verification', style: TextStyle(color: Colors.teal)),
+              ),
+            ],
+          ),
+        );
+        if (action == 'retry') {
+          await _addSkill(skill, certificateImage, requiresVerification: true); // Retry the verification
+        } else if (action == 'prove') {
+          final iconName = await _selectIconForSkill(skill);
+          await _addSkillConfirmed(skill, certificateImage, iconName, verified: true);
+        } else if (action == 'add_without_verification') {
+          final iconName = await _selectIconForSkill(skill);
+          await _addSkillConfirmed(skill, null, iconName, verified: false);
+        }
       }
+    } else {
+      // Add skill without verification
+      final iconName = await _selectIconForSkill(skill);
+      await _addSkillConfirmed(skill, null, iconName, verified: false);
     }
   }
 
-  Future<void> _addSkillConfirmed(String skill, File certificateImage, String iconName) async {
+  Future<void> _addSkillConfirmed(String skill, File? certificateImage, String iconName, {required bool verified}) async {
     try {
       final user = FirebaseAuth.instance.currentUser!;
-      // Convert certificate image to base64
-      final bytes = await certificateImage.readAsBytes();
-      final certificateBase64 = base64Encode(bytes);
+      String? certificateBase64;
+      if (certificateImage != null) {
+        final bytes = await certificateImage.readAsBytes();
+        certificateBase64 = base64Encode(bytes);
+      }
 
-      // Store skill, certificate, and icon name in Firestore
+      // Store skill, certificate (if any), and icon name in Firestore
       setState(() {
         skills.add({
           'skill': skill,
-          'certificateBase64': certificateBase64,
+          'certificateBase64': certificateBase64 ?? '',
           'iconName': iconName,
           'timestamp': DateTime.now().millisecondsSinceEpoch,
+          'verified': verified,
         });
         _animationController.reset();
         _animationController.forward(); // Restart animation for new item
@@ -333,6 +364,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
           'certificateBase64': s['certificateBase64'] ?? '',
           'iconName': s['iconName'] ?? 'star',
           'timestamp': s['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+          'verified': s['verified'] ?? false,
         })
             .toList(),
       }, SetOptions(merge: true));
@@ -344,7 +376,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
         _isLoading = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Skill added successfully')),
+        SnackBar(content: Text(verified ? 'Skill added successfully' : 'Skill added without verification')),
       );
     } catch (e) {
       setState(() {
@@ -403,6 +435,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
           'certificateBase64': s['certificateBase64'] ?? '',
           'iconName': s['iconName'] ?? 'star',
           'timestamp': s['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+          'verified': s['verified'] ?? false,
         })
             .toList(),
       }, SetOptions(merge: true));
@@ -465,7 +498,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
         );
         if (confirmed == true) {
           final skill = _skillController.text.trim();
-          await _addSkill(skill, _selectedImage);
+          await _addSkill(skill, _selectedImage, requiresVerification: true);
         } else {
           setState(() {
             _previewImagePath = null;
@@ -483,6 +516,12 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
   }
 
   void _viewCertificate(String base64Image) {
+    if (base64Image.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No certificate available for this skill')),
+      );
+      return;
+    }
     final bytes = base64Decode(base64Image);
     showDialog(
       context: context,
@@ -524,22 +563,33 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile'),
-        centerTitle: true,
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
-      ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Colors.teal.shade50, Colors.white],
+            colors: [Color(0xFFB2DFDB), Colors.white],
           ),
         ),
         child: Column(
           children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 40, 16, 16),
+              child: FadeTransition(
+                opacity: _titleFadeAnimation,
+                child: ScaleTransition(
+                  scale: _titleScaleAnimation,
+                  child: Text(
+                    'My Skills',
+                    style: GoogleFonts.poppins(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
+                    ),
+                  ),
+                ),
+              ),
+            ),
             if (_errorMessage != null)
               Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -618,8 +668,8 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
                           onPressed: () => showDialog(
                             context: context,
                             builder: (context) => AlertDialog(
-                              title: const Text('Upload Certificate'),
-                              content: const Text('Choose a certificate image to verify the skill.'),
+                              title: const Text('Add Skill'),
+                              content: const Text('Choose how to add the skill:'),
                               actions: [
                                 TextButton(
                                   onPressed: () => Navigator.pop(context),
@@ -630,14 +680,22 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
                                     Navigator.pop(context);
                                     _pickImage(ImageSource.gallery);
                                   },
-                                  child: const Text('Upload', style: TextStyle(color: Colors.teal)),
+                                  child: const Text('Upload Certificate', style: TextStyle(color: Colors.teal)),
                                 ),
                                 TextButton(
                                   onPressed: () {
                                     Navigator.pop(context);
                                     _pickImage(ImageSource.camera);
                                   },
-                                  child: const Text('Scan', style: TextStyle(color: Colors.teal)),
+                                  child: const Text('Scan Certificate', style: TextStyle(color: Colors.teal)),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    final skill = _skillController.text.trim();
+                                    _addSkill(skill, null, requiresVerification: false);
+                                  },
+                                  child: const Text('Add Without Certificate', style: TextStyle(color: Colors.teal)),
                                 ),
                               ],
                             ),
@@ -689,10 +747,24 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
                               parent: _animationController,
                               curve: Curves.easeOutBack,
                             ),
-                            child: Icon(
-                              _getIconData(skillData['iconName'] ?? 'star'),
-                              size: 30,
-                              color: Colors.teal,
+                            child: Stack(
+                              children: [
+                                Icon(
+                                  _getIconData(skillData['iconName'] ?? 'star'),
+                                  size: 30,
+                                  color: Colors.teal,
+                                ),
+                                if (skillData['verified'] == true)
+                                  Positioned(
+                                    right: 0,
+                                    bottom: 0,
+                                    child: Icon(
+                                      Icons.verified,
+                                      size: 16,
+                                      color: Colors.blue,
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                           title: Text(
@@ -701,9 +773,16 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
                           ),
                           subtitle: GestureDetector(
                             onTap: () => _viewCertificate(skillData['certificateBase64'] ?? ''),
-                            child: const Text(
-                              'View Certificate',
-                              style: TextStyle(color: Colors.teal, decoration: TextDecoration.underline),
+                            child: Text(
+                              skillData['certificateBase64']?.isNotEmpty == true
+                                  ? 'View Certificate'
+                                  : 'No Certificate',
+                              style: TextStyle(
+                                color: Colors.teal,
+                                decoration: skillData['certificateBase64']?.isNotEmpty == true
+                                    ? TextDecoration.underline
+                                    : TextDecoration.none,
+                              ),
                             ),
                           ),
                           trailing: GestureDetector(
@@ -725,40 +804,6 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
               ),
             ),
           ],
-        ),
-      ),
-      floatingActionButton: ScaleTransition(
-        scale: _fabScaleAnimation,
-        child: FloatingActionButton(
-          onPressed: () => showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Upload Certificate'),
-              content: const Text('Choose a certificate image to verify the skill.'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel', style: TextStyle(color: Colors.teal)),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _pickImage(ImageSource.gallery);
-                  },
-                  child: const Text('Upload', style: TextStyle(color: Colors.teal)),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _pickImage(ImageSource.camera);
-                  },
-                  child: const Text('Scan', style: TextStyle(color: Colors.teal)),
-                ),
-              ],
-            ),
-          ),
-          backgroundColor: Colors.teal,
-          child: const Icon(Icons.add, color: Colors.white),
         ),
       ),
     );
