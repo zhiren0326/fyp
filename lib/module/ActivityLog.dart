@@ -40,8 +40,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     final currentUser = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
-      appBar: AppBar(
-      ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection('jobs')

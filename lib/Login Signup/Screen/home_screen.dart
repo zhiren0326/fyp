@@ -2,8 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:fyp/Notification%20Module/NotificationScreen.dart';
+import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
-import 'package:fyp/module/Profile.dart';
 import 'package:fyp/module/Report.dart';
 import 'package:fyp/module/Settings.dart';
 import 'package:fyp/module/SkillTags.dart';
@@ -22,12 +22,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late AnimationController _controller;
   late Animation<Offset> _offsetAnimation;
 
-  static const List<Widget> _screens = [
-    ActivityLogScreen(),
-    SkillTagScreen(),
-    ReportScreen(),
-    SettingsScreen(),
-    ProfileScreen(),
+  static final List<Widget> _screens = [
+    const ActivityLogScreen(),
+    const SkillTagScreen(),
+    const ReportScreen(),
+    const SettingsScreen(),
+    AccountPage(),
   ];
 
   @override
