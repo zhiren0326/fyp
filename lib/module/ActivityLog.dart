@@ -8,7 +8,6 @@ import 'package:google_fonts/google_fonts.dart';
 class ActivityLogScreen extends StatefulWidget {
   const ActivityLogScreen({super.key});
 
-
   @override
   State<ActivityLogScreen> createState() => _ActivityLogScreenState();
 }
@@ -17,13 +16,6 @@ final TextEditingController _searchController = TextEditingController();
 String _searchQuery = '';
 
 class _ActivityLogScreenState extends State<ActivityLogScreen> {
-  void acceptJob(String jobId) {
-    FirebaseFirestore.instance.collection('jobs').doc(jobId).update({
-      'isAccepted': true,
-      'acceptedBy': FirebaseAuth.instance.currentUser!.uid,
-    });
-  }
-
   @override
   void initState() {
     super.initState();
@@ -35,6 +27,15 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         ),
       );
     });
+  }
+
+  void _editJob(String jobId, Map<String, dynamic> data) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddJobPage(jobId: jobId, initialData: data),
+      ),
+    );
   }
 
   @override
@@ -67,13 +68,10 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                   String displayName = "User";
                   if (snapshot.hasData && snapshot.data!.exists) {
                     final data = snapshot.data!.data() as Map<String, dynamic>;
-                    if (data['name'] != null && data['name']
-                        .toString()
-                        .isNotEmpty) {
+                    if (data['name'] != null && data['name'].toString().isNotEmpty) {
                       displayName = data['name'];
                     }
                   }
-
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8.0),
                     child: Text(
@@ -89,7 +87,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                 },
               ),
             ),
-
             const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 15),
@@ -126,9 +123,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                 style: GoogleFonts.poppins(),
               ),
             ),
-
             const SizedBox(height: 10),
-
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 15),
               child: Text(
@@ -141,7 +136,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
               ),
             ),
             const SizedBox(height: 10),
-
             StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('jobs')
@@ -151,15 +145,14 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return const Center(child: Text("No jobs available."));
                 }
-
                 final jobs = snapshot.data!.docs.where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
+                  final isAccepted = data['isAccepted'] == true;
+                  if (isAccepted) return false; // Exclude accepted jobs
                   final jobPosition = data['jobPosition']?.toString().toLowerCase() ?? '';
-                  // Handle requiredSkill as either a List or a String
                   List<String> requiredSkills = [];
                   var skillData = data['requiredSkill'];
                   if (skillData != null) {
@@ -169,53 +162,50 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                       requiredSkills = (skillData as List<dynamic>).map((e) => e.toString().toLowerCase()).toList();
                     }
                   }
-
-                  // If search query is empty, show all jobs
                   if (_searchQuery.isEmpty) {
                     return true;
                   }
-
-                  // Check if jobPosition or any requiredSkill contains the search query
                   final matchesJobPosition = jobPosition.contains(_searchQuery);
                   final matchesSkill = requiredSkills.any((skill) => skill.contains(_searchQuery));
-
                   return matchesJobPosition || matchesSkill;
                 }).toList();
-
                 return Column(
                   children: jobs.map((job) {
                     final data = job.data() as Map<String, dynamic>;
-
                     if ((data['jobPosition'] == null || data['jobPosition'].toString().trim().isEmpty) &&
                         (data['description'] == null || data['description'].toString().trim().isEmpty)) {
                       return const SizedBox.shrink();
                     }
-
                     final isOwner = data['postedBy'] == currentUser.uid;
-                    final isAccepted = data['isAccepted'] == true;
                     final jobPosition = data['jobPosition'] ?? 'N/A';
                     final taskType = data['isShortTerm'] == true ? 'Short-term' : 'Long-term';
                     final startDate = data['startDate'] ?? '-';
                     final startTime = data['isShortTerm'] == true ? (data['startTime'] ?? '-') : '';
                     final salary = data['salary'] ?? 'Not specified';
 
-                    return Card(
-                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      elevation: 3,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => JobDetailPage(data: data),
-                            ),
-                          );
-                        },
+                    return GestureDetector(
+                      onTap: () {
+                        print('Navigating to JobDetailPage with jobId: ${job.id}');
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => JobDetailPage(data: data, jobId: job.id),
+                          ),
+                        ).then((value) {
+                          print('Returned from JobDetailPage');
+                        }).catchError((error) {
+                          print('Navigation error: $error');
+                        });
+                      },
+                      child: Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        elevation: 3,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        color: Colors.white,
                         child: ListTile(
-                          contentPadding: const EdgeInsets.all(12),
+                          contentPadding: const EdgeInsets.all(10),
                           title: Text(
                             jobPosition,
                             style: GoogleFonts.poppins(
@@ -240,24 +230,12 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                           ),
                           trailing: isOwner
                               ? IconButton(
-                            icon: const Icon(Icons.edit, color: Colors.orange),
+                            icon: const Icon(Icons.edit, color: Colors.teal),
                             onPressed: () {
-                              // Edit logic
+                              _editJob(job.id, data); // Navigate to edit page
                             },
                           )
-                              : isAccepted
-                              ? const Text(
-                            "Taken",
-                            style: TextStyle(color: Colors.grey),
-                          )
-                              : ElevatedButton(
-                            onPressed: () => acceptJob(job.id),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.teal,
-                              foregroundColor: Colors.white,
-                            ),
-                            child: const Text("Accept"),
-                          ),
+                              : const SizedBox.shrink(),
                         ),
                       ),
                     );
@@ -289,3 +267,4 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     );
   }
 }
+

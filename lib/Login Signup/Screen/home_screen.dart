@@ -1,8 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:fyp/Accept%20Job%20Module/acceptjob.dart';
 import 'package:fyp/Notification%20Module/NotificationScreen.dart';
+import 'package:fyp/CalendarPage/CalendarPage.dart'; // Import CalendarPage
 import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Report.dart';
@@ -11,7 +11,8 @@ import '../../Login With Google/google_auth.dart';
 import 'login.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final int initialIndex;
+  const HomeScreen({super.key, this.initialIndex = 0});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -23,16 +24,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late Animation<Offset> _offsetAnimation;
 
   static final List<Widget> _screens = [
-    const ActivityLogScreen(),
-    Acceptjob(),
-    const ReportScreen(),
-    const SettingsScreen(),
-    AccountPage(),
+    const ActivityLogScreen(), // Index 0: Home
+    const CalendarPage(),      // Index 1: Calendar
+    const ReportScreen(),      // Index 2: Report
+    const SettingsScreen(),    // Index 3: Settings
+    AccountPage(),             // Index 4: Account
   ];
 
   @override
   void initState() {
     super.initState();
+    _selectedIndex = widget.initialIndex; // Set initial index from constructor
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -41,7 +43,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       begin: const Offset(-1, 0),
       end: const Offset(0, 0),
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
-    print('AnimationController initialized');
+    print('AnimationController initialized. Initial index: $_selectedIndex');
   }
 
   @override
@@ -53,7 +55,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
-      print('Selected index: $index');
+      print('Selected index updated to: $index');
     });
   }
 
@@ -72,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             icon: const Icon(Icons.menu),
             onPressed: () {
               print('Menu icon tapped');
-              _controller.forward(); // Start animation
+              _controller.forward();
               Scaffold.of(context).openDrawer();
             },
           ),
@@ -108,9 +110,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               }
             },
             onItemTapped: (index) {
-              _onItemTapped(index); // Update selected index
-              Navigator.pop(context); // Close the drawer
-              _controller.reverse(); // Reset animation
+              _onItemTapped(index);
+              Navigator.pop(context);
+              _controller.reverse();
             },
           ),
         ),
@@ -124,9 +126,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             label: 'Home',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.local_offer),
-            activeIcon: AnimatedNavIcon(icon: Icons.local_offer),
-            label: 'Activity',
+            icon: Icon(Icons.calendar_month),
+            activeIcon: AnimatedNavIcon(icon: Icons.calendar_month),
+            label: 'Calendar',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.chat),
@@ -205,7 +207,7 @@ class AnimatedDrawer extends StatelessWidget {
                 .snapshots()
                 : const Stream.empty(),
             builder: (context, snapshot) {
-              print('Snapshot data: ${snapshot.data?.data()}'); // Debug print
+              print('Snapshot data: ${snapshot.data?.data()}');
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const DrawerHeader(
                   decoration: BoxDecoration(color: Colors.teal),
@@ -247,7 +249,7 @@ class AnimatedDrawer extends StatelessWidget {
                 );
               }
               final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-              print('Fetched data: $data'); // Debug print
+              print('Fetched data: $data');
               final user = FirebaseAuth.instance.currentUser;
               final photoURL = data['photoURL'] ?? user?.photoURL ?? 'https://via.placeholder.com/150';
               return DrawerHeader(
@@ -290,7 +292,7 @@ class AnimatedDrawer extends StatelessWidget {
             ),
             title: const Text('Home'),
             onTap: () {
-              onItemTapped(0); // Maps to ActivityLogScreen
+              onItemTapped(0);
             },
           ),
           ListTile(
@@ -301,7 +303,7 @@ class AnimatedDrawer extends StatelessWidget {
             ),
             title: const Text('Profile'),
             onTap: () {
-              onItemTapped(1); // Maps to ProfileScreen
+              onItemTapped(1); // This should align with CalendarPage index
             },
           ),
           ListTile(
@@ -312,7 +314,7 @@ class AnimatedDrawer extends StatelessWidget {
             ),
             title: const Text('Skill Tags'),
             onTap: () {
-              onItemTapped(2); // Maps to SkillTagScreen
+              onItemTapped(2);
             },
           ),
           ListTile(
@@ -323,7 +325,7 @@ class AnimatedDrawer extends StatelessWidget {
             ),
             title: const Text('Report'),
             onTap: () {
-              onItemTapped(3); // Maps to ReportScreen
+              onItemTapped(3);
             },
           ),
           ListTile(
@@ -334,7 +336,7 @@ class AnimatedDrawer extends StatelessWidget {
             ),
             title: const Text('Settings'),
             onTap: () {
-              onItemTapped(4); // Maps to SettingsScreen
+              onItemTapped(4);
             },
           ),
           ListTile(

@@ -56,7 +56,8 @@ dependencies:
   google_maps_flutter: ^2.12.3
   geocoding: ^4.0.0
   flutter_svg: ^2.2.0
-
+  table_calendar: ^3.2.0
+  flutter_date_range_picker: ^0.2.1
 
 
 

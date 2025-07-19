@@ -172,8 +172,8 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
             child: ElevatedButton(
               onPressed: _confirmLocation,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                disabledBackgroundColor: Colors.orange.withOpacity(0.5),
+                backgroundColor: Colors.teal,
+                disabledBackgroundColor: Colors.teal.withOpacity(0.5),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
