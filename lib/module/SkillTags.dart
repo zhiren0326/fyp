@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 
 class SkillTagScreen extends StatefulWidget {
@@ -290,7 +289,7 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
                   const SizedBox(height: 8),
                   Text('Extracted Text: ${(verificationResult['extractedText'] as String).isEmpty ? 'No text extracted' : verificationResult['extractedText'] as String}'),
                   const SizedBox(height: 8),
-                  const Text('Would you like to retry, prove the certificate, or add without verification?'),
+                  const Text('Would you like to retry or add without verification?'),
                 ],
               ),
             ),
@@ -302,10 +301,6 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
               TextButton(
                 onPressed: () => Navigator.pop(context, 'retry'),
                 child: const Text('Retry', style: TextStyle(color: Colors.teal)),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, 'prove'),
-                child: const Text('Prove Certificate', style: TextStyle(color: Colors.teal)),
               ),
               TextButton(
                 onPressed: () => Navigator.pop(context, 'add_without_verification'),
@@ -563,6 +558,16 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text('My Skills'),
+        centerTitle: true,
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+      ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -573,23 +578,6 @@ class _SkillTagScreenState extends State<SkillTagScreen> with SingleTickerProvid
         ),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 40, 16, 16),
-              child: FadeTransition(
-                opacity: _titleFadeAnimation,
-                child: ScaleTransition(
-                  scale: _titleScaleAnimation,
-                  child: Text(
-                    'My Skills',
-                    style: GoogleFonts.poppins(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black,
-                    ),
-                  ),
-                ),
-              ),
-            ),
             if (_errorMessage != null)
               Padding(
                 padding: const EdgeInsets.all(16.0),

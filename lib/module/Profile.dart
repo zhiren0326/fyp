@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:fyp/module/SkillTags.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -419,6 +418,30 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text('Profile'),
+        centerTitle: true,
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: Icon(_isEditing ? Icons.close : Icons.edit, color: Colors.white),
+            onPressed: () {
+              setState(() {
+                _isEditing = !_isEditing;
+                _errorMessage = null;
+                _showResetPassword = false;
+                _animationController.reset();
+                _animationController.forward();
+              });
+            },
+          ),
+        ],
+      ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -431,39 +454,6 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           padding: const EdgeInsets.all(16.0),
           child: Column(
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween, // Spreads children, keeping IconButton at the end
-                children: [
-                  // Spacer to push the Text to the center
-                  Expanded(child: Container()), // Empty container to balance the left side
-                  Text(
-                    'Profile',
-                    style: GoogleFonts.poppins(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black,
-                    ),
-                  ),
-                  // Spacer to balance the right side, ensuring Text is centered
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight, // Align IconButton to the far right
-                      child: IconButton(
-                        icon: Icon(_isEditing ? Icons.close : Icons.edit, color: Colors.teal),
-                        onPressed: () {
-                          setState(() {
-                            _isEditing = !_isEditing;
-                            _errorMessage = null;
-                            _showResetPassword = false;
-                            _animationController.reset();
-                            _animationController.forward();
-                          });
-                        },
-                      ),
-                    ),
-                  ),
-                ],
-              ),
               Expanded(
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())
@@ -994,6 +984,10 @@ class _MapPickerScreenState extends State<MapPickerScreen> with SingleTickerProv
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
         title: const Text('Select Location'),
         centerTitle: true,
         backgroundColor: Colors.teal,
@@ -1001,7 +995,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> with SingleTickerProv
         actions: [
           if (_selectedLocation != null)
             IconButton(
-              icon: const Icon(Icons.check),
+              icon: const Icon(Icons.check, color: Colors.white),
               onPressed: () {
                 widget.onLocationSelected(_selectedLocation!);
                 Navigator.pop(context);

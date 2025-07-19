@@ -1,12 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:fyp/Accept%20Job%20Module/acceptjob.dart';
 import 'package:fyp/Notification%20Module/NotificationScreen.dart';
 import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Report.dart';
 import 'package:fyp/module/Settings.dart';
-import 'package:fyp/module/SkillTags.dart';
 import '../../Login With Google/google_auth.dart';
 import 'login.dart';
 
@@ -24,7 +24,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   static final List<Widget> _screens = [
     const ActivityLogScreen(),
-    const SkillTagScreen(),
+    Acceptjob(),
     const ReportScreen(),
     const SettingsScreen(),
     AccountPage(),
@@ -125,12 +125,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.local_offer),
-            activeIcon: AnimatedNavIcon(icon: Icons.person),
+            activeIcon: AnimatedNavIcon(icon: Icons.local_offer),
             label: 'Activity',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.chat),
-            activeIcon: AnimatedNavIcon(icon: Icons.local_offer),
+            activeIcon: AnimatedNavIcon(icon: Icons.chat),
             label: 'Chat',
           ),
           BottomNavigationBarItem(
@@ -139,9 +139,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             label: 'Reward',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.person),
+            icon: Icon(Icons.settings),
             activeIcon: AnimatedNavIcon(icon: Icons.settings),
-            label: 'Account',
+            label: 'Setting',
           )
         ],
         currentIndex: _selectedIndex,
