@@ -21,10 +21,11 @@ class _AddJobPageState extends State<AddJobPage> {
     'Job position*': TextEditingController(),
     'Type of workplace*': TextEditingController(),
     'Job location*': TextEditingController(),
-    'Company name*': TextEditingController(),
+    'Employer/Company Name*': TextEditingController(),
     'Employment type*': TextEditingController(),
     'Salary (RM)*': TextEditingController(),
     'Description': TextEditingController(),
+    'Required Skill*': TextEditingController(),
     'Start date*': TextEditingController(),
     'Start time*': TextEditingController(),
     'End date*': TextEditingController(),
@@ -44,7 +45,7 @@ class _AddJobPageState extends State<AddJobPage> {
     if (!_isFormValid()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please fill out all required fields.'),
+          content: Text('Please fill out all required fields with (*) sign.'),
           backgroundColor: Colors.red,
           duration: Duration(seconds: 2),
         ),
@@ -56,10 +57,11 @@ class _AddJobPageState extends State<AddJobPage> {
       'jobPosition': controllers['Job position*']!.text,
       'workplaceType': controllers['Type of workplace*']!.text,
       'location': controllers['Job location*']!.text,
-      'companyName': controllers['Company name*']!.text,
+      'employerName': controllers['Employer/Company Name*']!.text,
       'employmentType': controllers['Employment type*']!.text,
       'salary': int.tryParse(controllers['Salary (RM)*']!.text) ?? 0,
       'description': controllers['Description']!.text,
+      'requiredSkill': controllers['Required Skill*']!.text,
       'startDate': controllers['Start date*']!.text,
       'startTime': isShortTerm ? controllers['Start time*']!.text : null,
       'endDate': controllers['End date*']!.text,
@@ -278,15 +280,17 @@ class _AddJobPageState extends State<AddJobPage> {
   }
 
   bool _isFormValid() {
-    return controllers.entries
-        .where((entry) {
+    for (var entry in controllers.entries) {
       final isRequired = entry.key.endsWith('*');
       final isTimeField = entry.key == 'Start time*' || entry.key == 'End time*';
-      if (!isRequired) return false;
-      if (!isShortTerm && isTimeField) return false;
-      return true;
-    })
-        .every((entry) => entry.value.text.trim().isNotEmpty);
+      if (!isRequired) continue;
+      if (!isShortTerm && isTimeField) continue;
+      if (entry.value.text.trim().isEmpty) {
+        print('Missing required field: ${entry.key}');
+        return false;
+      }
+    }
+    return true;
   }
 
   Widget _buildSwitchRow({required String label, required bool value, required Function(bool) onChanged}) {
@@ -365,9 +369,10 @@ class _AddJobPageState extends State<AddJobPage> {
                   _buildFieldTile('Job position*'),
                   _buildDropdownField('Type of workplace*', workplaceOptions),
                   _buildFieldTile('Job location*'),
-                  _buildFieldTile('Company name*'),
+                  _buildFieldTile('Employer/Company Name*'),
                   _buildDropdownField('Employment type*', employmentOptions),
                   _buildFieldTile('Salary (RM)*'),
+                  _buildFieldTile('Required Skill*'),
                   _buildFieldTile('Description'),
                   _buildDateTimePicker('Start date*', true),
                   if (isShortTerm) _buildDateTimePicker('Start time*', false),
