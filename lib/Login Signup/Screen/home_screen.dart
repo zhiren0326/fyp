@@ -5,7 +5,7 @@ import 'package:fyp/Notification%20Module/NotificationScreen.dart';
 import 'package:fyp/CalendarPage/CalendarPage.dart'; // Import CalendarPage
 import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
-import 'package:fyp/module/Report.dart';
+import 'package:fyp/module/Chat.dart';
 import 'package:fyp/module/Settings.dart';
 import '../../Login With Google/google_auth.dart';
 import 'login.dart';

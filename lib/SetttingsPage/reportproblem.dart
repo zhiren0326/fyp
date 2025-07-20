@@ -1,8 +1,11 @@
+import 'dart:io';
+import 'dart:convert'; // Added for Base64 encoding
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ReportProblemPage extends StatefulWidget {
@@ -20,10 +23,13 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
   final _formKey = GlobalKey<FormState>();
   final _subjectController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final _attachmentController = TextEditingController();
+  File? _selectedImage;
+  bool _isUploading = false;
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
-  late Animation<Offset> _slideAnimation;
+  late Animation<Offset> _slideAnimationSubject;
+  late Animation<Offset> _slideAnimationDescription;
+  late Animation<Offset> _slideAnimationPhoto;
   late Animation<double> _scaleAnimation;
 
   @override
@@ -32,14 +38,20 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
     _analytics = FirebaseAnalytics.instance;
     // Initialize animation controller
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 1000),
       vsync: this,
     );
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeIn),
     );
-    _slideAnimation = Tween<Offset>(begin: Offset(0, 0.2), end: Offset.zero).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    _slideAnimationSubject = Tween<Offset>(begin: Offset(0, 0.2), end: Offset.zero).animate(
+      CurvedAnimation(parent: _controller, curve: Interval(0.0, 0.6, curve: Curves.easeOut)),
+    );
+    _slideAnimationDescription = Tween<Offset>(begin: Offset(0, 0.2), end: Offset.zero).animate(
+      CurvedAnimation(parent: _controller, curve: Interval(0.2, 0.8, curve: Curves.easeOut)),
+    );
+    _slideAnimationPhoto = Tween<Offset>(begin: Offset(0, 0.2), end: Offset.zero).animate(
+      CurvedAnimation(parent: _controller, curve: Interval(0.4, 1.0, curve: Curves.easeOut)),
     );
     _scaleAnimation = Tween<double>(begin: 1.0, end: 0.9).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
@@ -106,12 +118,31 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
             'user_id': _currentUser!.uid,
             'timestamp': DateTime.now().toIso8601String(),
             'subject': _subjectController.text,
+            'has_attachment': _selectedImage != null ? 'true' : 'false',
           },
         );
         print('Problem report submission logged');
       } catch (e) {
         print('Error logging problem report submission: $e');
       }
+    }
+  }
+
+  // Pick image from gallery or camera
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(source: source, maxWidth: 800, maxHeight: 800);
+      if (pickedFile != null) {
+        setState(() {
+          _selectedImage = File(pickedFile.path);
+        });
+      }
+    } catch (e) {
+      print('Error picking image: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to pick image: $e')),
+      );
     }
   }
 
@@ -130,7 +161,38 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
         );
         return;
       }
+      bool? confirm = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Confirm Submission', style: GoogleFonts.manrope(fontWeight: FontWeight.w600)),
+          content: Text('Are you sure you want to submit this problem report?', style: GoogleFonts.manrope()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancel', style: GoogleFonts.manrope()),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
+              ),
+              child: Text('Submit', style: GoogleFonts.manrope()),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+
+      setState(() {
+        _isUploading = true;
+      });
       try {
+        String? imageBase64;
+        if (_selectedImage != null) {
+          final bytes = await _selectedImage!.readAsBytes();
+          imageBase64 = base64Encode(bytes);
+        }
         await FirebaseFirestore.instance
             .collection('users')
             .doc(_currentUser!.uid)
@@ -138,19 +200,25 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
             .add(<String, dynamic>{
           'subject': _subjectController.text,
           'description': _descriptionController.text,
-          'attachment': _attachmentController.text.isEmpty ? null : _attachmentController.text,
+          'attachment_base64': imageBase64, // Store Base64 string instead of URL
           'timestamp': DateTime.now().toIso8601String(),
           'user_id': _currentUser!.uid,
         });
         await _logProblemReportSubmitted();
         _subjectController.clear();
         _descriptionController.clear();
-        _attachmentController.clear();
+        setState(() {
+          _selectedImage = null;
+          _isUploading = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Problem report submitted successfully')),
         );
       } catch (e) {
         print('Error submitting problem report: $e');
+        setState(() {
+          _isUploading = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to submit problem report: $e')),
         );
@@ -162,7 +230,6 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
   void dispose() {
     _subjectController.dispose();
     _descriptionController.dispose();
-    _attachmentController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -193,8 +260,8 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
           child: Text(
             'Report a Problem',
             style: GoogleFonts.manrope(
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
             ),
           ),
         ),
@@ -233,7 +300,7 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
                   ),
                   SizedBox(height: 16),
                   SlideTransition(
-                    position: _slideAnimation,
+                    position: _slideAnimationSubject,
                     child: Card(
                       elevation: 2,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -249,48 +316,104 @@ class _ReportProblemPageState extends State<ReportProblemPage> with SingleTicker
                                 style: GoogleFonts.manrope(fontWeight: FontWeight.w500),
                               ),
                               SizedBox(height: 8),
-                              TextFormField(
-                                controller: _subjectController,
-                                decoration: InputDecoration(
-                                  labelText: 'Subject',
-                                  border: OutlineInputBorder(),
-                                  labelStyle: GoogleFonts.manrope(),
+                              SlideTransition(
+                                position: _slideAnimationSubject,
+                                child: TextFormField(
+                                  controller: _subjectController,
+                                  decoration: InputDecoration(
+                                    labelText: 'Subject',
+                                    border: OutlineInputBorder(),
+                                    labelStyle: GoogleFonts.manrope(),
+                                  ),
+                                  validator: (value) {
+                                    if (value == null || value.isEmpty) {
+                                      return 'Please enter a subject';
+                                    }
+                                    return null;
+                                  },
                                 ),
-                                validator: (value) {
-                                  if (value == null || value.isEmpty) {
-                                    return 'Please enter a subject';
-                                  }
-                                  return null;
-                                },
                               ),
                               SizedBox(height: 8),
-                              TextFormField(
-                                controller: _descriptionController,
-                                decoration: InputDecoration(
-                                  labelText: 'Description',
-                                  border: OutlineInputBorder(),
-                                  labelStyle: GoogleFonts.manrope(),
+                              SlideTransition(
+                                position: _slideAnimationDescription,
+                                child: TextFormField(
+                                  controller: _descriptionController,
+                                  decoration: InputDecoration(
+                                    labelText: 'Description',
+                                    border: OutlineInputBorder(),
+                                    labelStyle: GoogleFonts.manrope(),
+                                  ),
+                                  maxLines: 5,
+                                  validator: (value) {
+                                    if (value == null || value.isEmpty) {
+                                      return 'Please enter a description';
+                                    }
+                                    return null;
+                                  },
                                 ),
-                                maxLines: 5,
-                                validator: (value) {
-                                  if (value == null || value.isEmpty) {
-                                    return 'Please enter a description';
-                                  }
-                                  return null;
-                                },
-                              ),
-                              SizedBox(height: 8),
-                              TextFormField(
-                                controller: _attachmentController,
-                                decoration: InputDecoration(
-                                  labelText: 'Attachment Description (e.g., screenshot details) - Optional',
-                                  border: OutlineInputBorder(),
-                                  labelStyle: GoogleFonts.manrope(),
-                                ),
-                                maxLines: 2,
                               ),
                               SizedBox(height: 16),
-                              ElevatedButton(
+                              SlideTransition(
+                                position: _slideAnimationPhoto,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Attach a Photo (Optional)',
+                                      style: GoogleFonts.manrope(fontWeight: FontWeight.w500),
+                                    ),
+                                    SizedBox(height: 8),
+                                    if (_selectedImage != null)
+                                      Stack(
+                                        children: [
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(8),
+                                            child: Image.file(
+                                              _selectedImage!,
+                                              height: 150,
+                                              width: double.infinity,
+                                              fit: BoxFit.cover,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            top: 8,
+                                            right: 8,
+                                            child: GestureDetector(
+                                              onTap: () => setState(() => _selectedImage = null),
+                                              child: Container(
+                                                padding: EdgeInsets.all(4),
+                                                color: Colors.black54,
+                                                child: Icon(Icons.close, color: Colors.white, size: 20),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    if (_selectedImage == null) ...[
+                                      ListTile(
+                                        leading: Icon(Icons.photo_library, color: Colors.teal),
+                                        title: Text(
+                                          'Select from Album',
+                                          style: GoogleFonts.manrope(),
+                                        ),
+                                        onTap: () => _pickImage(ImageSource.gallery),
+                                      ),
+                                      ListTile(
+                                        leading: Icon(Icons.camera_alt, color: Colors.teal),
+                                        title: Text(
+                                          'Take a Photo',
+                                          style: GoogleFonts.manrope(),
+                                        ),
+                                        onTap: () => _pickImage(ImageSource.camera),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              _isUploading
+                                  ? Center(child: CircularProgressIndicator(color: Colors.teal))
+                                  : ElevatedButton(
                                 onPressed: _submitReport,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.teal,
