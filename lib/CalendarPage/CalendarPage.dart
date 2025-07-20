@@ -19,7 +19,7 @@ class CalendarPage extends StatefulWidget {
 
 class _CalendarPageState extends State<CalendarPage> {
   CalendarFormat _calendarFormat = CalendarFormat.month;
-  DateTime _focusedDay = DateTime.now();
+  DateTime _focusedDay = DateTime.now().toLocal(); // Start with current date: 2025-07-21
   DateTime? _selectedDay;
   Map<DateTime, List<Task>> _tasks = {};
   final TextEditingController _taskController = TextEditingController();
@@ -41,10 +41,12 @@ class _CalendarPageState extends State<CalendarPage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       try {
+        final now = dateOnly(DateTime.now().toLocal()); // Current date: 2025-07-21
         final snapshot = await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
             .collection('tasks')
+            .where(FieldPath.documentId, isGreaterThanOrEqualTo: now.toIso8601String().split('T')[0])
             .get();
         setState(() {
           _tasks = {
@@ -75,7 +77,13 @@ class _CalendarPageState extends State<CalendarPage> {
         startTime: TimeOfDay.now(),
         endTime: TimeOfDay.now().replacing(hour: TimeOfDay.now().hour + 1),
       );
-      final taskDate = dateOnly(_selectedDay!); // Single day for manual addition
+      final taskDate = dateOnly(_selectedDay!);
+      if (taskDate.isBefore(dateOnly(DateTime.now().toLocal()))) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot add tasks for past dates.')),
+        );
+        return;
+      }
       setState(() {
         _tasks.putIfAbsent(taskDate, () => []).add(task);
       });
@@ -138,6 +146,7 @@ class _CalendarPageState extends State<CalendarPage> {
 
   @override
   Widget build(BuildContext context) {
+    final now = dateOnly(DateTime.now().toLocal()); // 2025-07-21
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -151,7 +160,7 @@ class _CalendarPageState extends State<CalendarPage> {
         body: Column(
           children: [
             TableCalendar(
-              firstDay: DateTime.utc(2020, 1, 1),
+              firstDay: now, // Restrict to today onward: 2025-07-21
               lastDay: DateTime.utc(2030, 12, 31),
               focusedDay: _focusedDay,
               calendarFormat: _calendarFormat,

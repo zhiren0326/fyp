@@ -72,6 +72,18 @@ class _AddJobPageState extends State<AddJobPage> {
 
   Future<void> _submitJob() async {
     final currentUser = FirebaseAuth.instance.currentUser;
+
+    final startDateTime = _parseDateTime(controllers['Start date*']!.text, controllers['Start time*']!.text);
+    if (startDateTime != null && startDateTime.isBefore(DateTime.now())) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Start date and time cannot be in the past.'),
+          backgroundColor: Color(0xFF006D77),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
     if (currentUser == null) return;
 
     if (!_isFormValid()) {
@@ -85,6 +97,22 @@ class _AddJobPageState extends State<AddJobPage> {
       return;
     }
 
+    // Validate start and end date/time for short-term tasks
+    if (isShortTerm) {
+      final startDateTime = _parseDateTime(controllers['Start date*']!.text, controllers['Start time*']!.text);
+      final endDateTime = _parseDateTime(controllers['End date*']!.text, controllers['End time*']!.text);
+      if (startDateTime == null || endDateTime == null || startDateTime.isAfter(endDateTime)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Start date and time must be earlier than end date and time.'),
+            backgroundColor: Color(0xFF006D77),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+    }
+
     final jobData = <String, dynamic>{
       'jobPosition': controllers['Job position*']!.text,
       'workplaceType': controllers['Type of workplace*']!.text,
@@ -96,7 +124,7 @@ class _AddJobPageState extends State<AddJobPage> {
       'requiredSkill': controllers['Required Skill*']!.text,
       'startDate': controllers['Start date*']!.text,
       'startTime': isShortTerm ? controllers['Start time*']!.text : null,
-      'endDate': controllers['End date*']!.text,
+      'endDate': isShortTerm ? controllers['End date*']!.text : null,
       'endTime': isShortTerm ? controllers['End time*']!.text : null,
       'recurring': isRecurring,
       'recurringTasks': isRecurring ? controllers['Recurring Tasks']!.text : null,
@@ -123,6 +151,31 @@ class _AddJobPageState extends State<AddJobPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to ${widget.jobId != null ? 'update' : 'post'} job: $e'), backgroundColor: Color(0xFF006D77)),
       );
+    }
+  }
+
+  // Helper method to parse date and time into DateTime
+  DateTime? _parseDateTime(String dateStr, String timeStr) {
+    try {
+      final dateParts = dateStr.split('-');
+      if (dateParts.length != 3) return null;
+      final timeParts = timeStr.split(':');
+      if (timeParts.length != 2) return null;
+
+      final hour = int.parse(timeParts[0].replaceAll(RegExp(r'[^0-9]'), ''));
+      final minute = int.parse(timeParts[1].replaceAll(RegExp(r'[^0-9]'), ''));
+      final year = int.parse(dateParts[0]);
+      final month = int.parse(dateParts[1]);
+      final day = int.parse(dateParts[2]);
+
+      // Determine AM/PM if present (simplified assumption based on format)
+      final period = timeStr.contains('PM') && hour != 12 ? 12 : (timeStr.contains('AM') && hour == 12 ? -12 : 0);
+      final adjustedHour = (hour + period) % 24;
+
+      return DateTime(year, month, day, adjustedHour, minute);
+    } catch (e) {
+      print('Error parsing date-time: $e');
+      return null;
     }
   }
 
@@ -199,11 +252,12 @@ class _AddJobPageState extends State<AddJobPage> {
             controller: controller,
             readOnly: true,
             onTap: () async {
+              final now = DateTime.now();
               final result = isDate
                   ? await showDatePicker(
                 context: context,
-                initialDate: DateTime.now(),
-                firstDate: DateTime(2000),
+                initialDate: controller.text.isNotEmpty ? DateTime.parse(controller.text) : now,
+                firstDate: now, // Restrict to today or later
                 lastDate: DateTime(2100),
               )
                   : await showTimePicker(
@@ -317,7 +371,7 @@ class _AddJobPageState extends State<AddJobPage> {
       final isRequired = entry.key.endsWith('*');
       final isTimeField = entry.key == 'Start time*' || entry.key == 'End time*';
       if (!isRequired) continue;
-      if (!isShortTerm && isTimeField) continue;
+      if (!isShortTerm && (entry.key == 'End date*' || isTimeField)) continue; // Skip for long-term
       if (entry.value.text.trim().isEmpty) {
         print('Missing required field: ${entry.key}');
         return false;
@@ -437,7 +491,7 @@ class _AddJobPageState extends State<AddJobPage> {
                     _buildFieldTile('Description'),
                     _buildDateTimePicker('Start date*', true),
                     if (isShortTerm) _buildDateTimePicker('Start time*', false),
-                    _buildDateTimePicker('End date*', true),
+                    if (isShortTerm) _buildDateTimePicker('End date*', true),
                     if (isShortTerm) _buildDateTimePicker('End time*', false),
                     if (isRecurring) _buildFieldTile('Recurring Tasks'),
                   ],

@@ -26,15 +26,22 @@ class JobDetailPage extends StatelessWidget {
       });
 
       // Determine start and end dates based on task type
+      DateTime now = DateTime.now().toLocal(); // Current date: 2025-07-21 02:28 AM +08
       DateTime startDate = data['startDate'] != null
           ? dateOnly(DateTime.parse(data['startDate']).toLocal())
-          : DateTime.now().toLocal(); // Default to today
+          : dateOnly(now); // Default to today, no past dates
+      if (startDate.isBefore(dateOnly(now))) {
+        startDate = dateOnly(now); // Enforce no past start dates
+      }
       DateTime endDate;
       if (data['isShortTerm'] == true && data['endDate'] != null) {
         endDate = dateOnly(DateTime.parse(data['endDate']).toLocal());
+        if (endDate.isBefore(startDate)) {
+          endDate = startDate; // Ensure end date is not before start date
+        }
       } else {
         // Long-term task: extend to end of year as default
-        endDate = DateTime(DateTime.now().year, 12, 31); // 2025-12-31
+        endDate = DateTime(now.year, 12, 31); // 2025-12-31
       }
 
       // Parse job start and end times
@@ -64,6 +71,14 @@ class JobDetailPage extends StatelessWidget {
       }
 
       print('Task saved successfully from ${startDate.toIso8601String().split('T')[0]} to ${endDate.toIso8601String().split('T')[0]}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Successfully applied!')),
+      );
+      await Future.delayed(const Duration(milliseconds: 500));
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen(initialIndex: 1)),
+      );
     } catch (error) {
       print('Error accepting job or creating task: $error');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -200,16 +215,6 @@ class JobDetailPage extends StatelessWidget {
                   : ElevatedButton(
                 onPressed: () async {
                   await acceptJob(jobId, context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Successfully applied!')),
-                  );
-                  await Future.delayed(const Duration(milliseconds: 500));
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const HomeScreen(initialIndex: 1),
-                    ),
-                  );
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.teal,
