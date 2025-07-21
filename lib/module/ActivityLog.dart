@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import '../Add Job Module/JobDetailPage.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class ActivityLogScreen extends StatefulWidget {
   const ActivityLogScreen({super.key});
@@ -12,10 +14,13 @@ class ActivityLogScreen extends StatefulWidget {
   State<ActivityLogScreen> createState() => _ActivityLogScreenState();
 }
 
-final TextEditingController _searchController = TextEditingController();
-String _searchQuery = '';
-
 class _ActivityLogScreenState extends State<ActivityLogScreen> {
+  static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo';
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  List<String> _suggestedJobRoles = [];
+  bool _enableAISuggestions = true;
+
   @override
   void initState() {
     super.initState();
@@ -26,7 +31,136 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
           duration: Duration(seconds: 2),
         ),
       );
+      _loadAISuggestionPreference();
     });
+  }
+
+  Future<void> _loadAISuggestionPreference() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      final profileDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('profiledetails')
+          .doc('profile')
+          .get();
+
+      if (profileDoc.exists) {
+        final data = profileDoc.data() as Map<String, dynamic>;
+        setState(() {
+          _enableAISuggestions = data['enableAISuggestions'] ?? true;
+        });
+        if (_enableAISuggestions) {
+          _fetchUserSkillsAndSuggestJobs();
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading AI suggestion preference: $e')),
+      );
+    }
+  }
+
+  Future<void> _updateAISuggestionPreference(bool value) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('profiledetails')
+          .doc('profile')
+          .set(
+        {'enableAISuggestions': value},
+        SetOptions(merge: true),
+      );
+      setState(() {
+        _enableAISuggestions = value;
+        if (value) {
+          _fetchUserSkillsAndSuggestJobs();
+        } else {
+          _suggestedJobRoles = [];
+        }
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating AI suggestion preference: $e')),
+      );
+    }
+  }
+
+  Future<void> _fetchUserSkillsAndSuggestJobs() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      final profileDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('profiledetails')
+          .doc('profile')
+          .get();
+
+      if (profileDoc.exists) {
+        final data = profileDoc.data() as Map<String, dynamic>;
+        List<String> userSkills = [];
+        var skillData = data['skills'];
+        if (skillData != null) {
+          if (skillData is String) {
+            userSkills = skillData.split(',').map((s) => s.trim()).toList();
+          } else if (skillData is List) {
+            userSkills = skillData.cast<String>().map((s) => s.trim()).toList();
+          }
+        }
+
+        if (userSkills.isNotEmpty) {
+          final suggestedRoles = await _getJobSuggestionsFromGemini(userSkills);
+          setState(() {
+            _suggestedJobRoles = suggestedRoles;
+          });
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching skills: $e')),
+      );
+    }
+  }
+
+  Future<List<String>> _getJobSuggestionsFromGemini(List<String> skills) async {
+    try {
+      final response = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'contents': [
+            {
+              'parts': [
+                {
+                  'text': 'Given the following skills: ${skills.join(', ')}, suggest 3-5 job roles that would be a good fit. Return only the job role names as a comma-separated string.'
+                }
+              ]
+            }
+          ]
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final text = data['candidates'][0]['content']['parts'][0]['text'] as String;
+        return text.split(',').map((s) => s.trim()).toList();
+      } else {
+        throw Exception('Failed to fetch job suggestions: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching job suggestions: $e')),
+      );
+      return [];
+    }
   }
 
   void _editJob(String jobId, Map<String, dynamic> data) {
@@ -47,7 +181,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFB2DFDB), Colors.white], // Teal to white gradient
+          colors: [Color(0xFFB2DFDB), Colors.white],
         ),
       ),
       child: Scaffold(
@@ -71,18 +205,44 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                     if (data['name'] != null && data['name'].toString().isNotEmpty) {
                       displayName = data['name'];
                     }
+                    _enableAISuggestions = data['enableAISuggestions'] ?? true;
                   }
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8.0),
-                    child: Text(
-                      'Hello, $displayName',
-                      style: GoogleFonts.poppins(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w600,
-                        decoration: TextDecoration.underline,
-                        color: Colors.black,
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Text(
+                          'Hello, $displayName',
+                          style: GoogleFonts.poppins(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w600,
+                            decoration: TextDecoration.underline,
+                            color: Colors.black,
+                          ),
+                        ),
                       ),
-                    ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Enable AI Job Suggestions',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.black,
+                            ),
+                          ),
+                          Switch(
+                            value: _enableAISuggestions,
+                            onChanged: (value) {
+                              _updateAISuggestionPreference(value);
+                            },
+                            activeColor: Colors.teal,
+                          ),
+                        ],
+                      ),
+                    ],
                   );
                 },
               ),
@@ -124,6 +284,111 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
               ),
             ),
             const SizedBox(height: 10),
+            if (_enableAISuggestions && _suggestedJobRoles.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 15),
+                child: Text(
+                  'Suggested Jobs for You',
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            if (_enableAISuggestions && _suggestedJobRoles.isNotEmpty)
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('jobs')
+                    .orderBy('postedAt', descending: true)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                    return const Center(child: Text("No suggested jobs available."));
+                  }
+                  final jobs = snapshot.data!.docs.where((doc) {
+                    final data = doc.data() as Map<String, dynamic>;
+                    final isAccepted = data['isAccepted'] == true;
+                    if (isAccepted) return false;
+                    final jobPosition = data['jobPosition']?.toString().toLowerCase() ?? '';
+                    return _suggestedJobRoles.any((role) => jobPosition.contains(role.toLowerCase()));
+                  }).toList();
+                  if (jobs.isEmpty) {
+                    return const Center(child: Text("No jobs match your skills."));
+                  }
+                  return Column(
+                    children: jobs.map((job) {
+                      final data = job.data() as Map<String, dynamic>;
+                      if ((data['jobPosition'] == null || data['jobPosition'].toString().trim().isEmpty) &&
+                          (data['description'] == null || data['description'].toString().trim().isEmpty)) {
+                        return const SizedBox.shrink();
+                      }
+                      final isOwner = data['postedBy'] == currentUser.uid;
+                      final jobPosition = data['jobPosition'] ?? 'N/A';
+                      final taskType = data['isShortTerm'] == true ? 'Short-term' : 'Long-term';
+                      final startDate = data['startDate'] ?? '-';
+                      final startTime = data['isShortTerm'] == true ? (data['startTime'] ?? '-') : '';
+                      final salary = data['salary'] ?? 'Not specified';
+
+                      return GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => JobDetailPage(data: data, jobId: job.id),
+                            ),
+                          );
+                        },
+                        child: Card(
+                          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          elevation: 3,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          color: Colors.white70,
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.all(10),
+                            title: Text(
+                              jobPosition,
+                              style: GoogleFonts.poppins(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Task Type: $taskType', style: GoogleFonts.poppins(fontSize: 14)),
+                                Text('Start Date: $startDate', style: GoogleFonts.poppins(fontSize: 14)),
+                                if (startTime.isNotEmpty)
+                                  Text('Start Time: $startTime', style: GoogleFonts.poppins(fontSize: 14)),
+                                Text('Salary: RM $salary', style: GoogleFonts.poppins(fontSize: 14)),
+                                if (data['requiredSkill'] != null)
+                                  Text(
+                                    'Skill Required: ${data['requiredSkill'] is String ? (data['requiredSkill'] as String).split(',').join(', ') : (data['requiredSkill'] as List).join(', ')}',
+                                    style: GoogleFonts.poppins(fontSize: 14),
+                                  ),
+                              ],
+                            ),
+                            trailing: isOwner
+                                ? IconButton(
+                              icon: const Icon(Icons.edit, color: Colors.teal),
+                              onPressed: () {
+                                _editJob(job.id, data);
+                              },
+                            )
+                                : const SizedBox.shrink(),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
+            const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 15),
               child: Text(
@@ -151,7 +416,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                 final jobs = snapshot.data!.docs.where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   final isAccepted = data['isAccepted'] == true;
-                  if (isAccepted) return false; // Exclude accepted jobs
+                  if (isAccepted) return false;
                   final jobPosition = data['jobPosition']?.toString().toLowerCase() ?? '';
                   List<String> requiredSkills = [];
                   var skillData = data['requiredSkill'];
@@ -185,17 +450,12 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
 
                     return GestureDetector(
                       onTap: () {
-                        print('Navigating to JobDetailPage with jobId: ${job.id}');
                         Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (context) => JobDetailPage(data: data, jobId: job.id),
                           ),
-                        ).then((value) {
-                          print('Returned from JobDetailPage');
-                        }).catchError((error) {
-                          print('Navigation error: $error');
-                        });
+                        );
                       },
                       child: Card(
                         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -232,7 +492,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                               ? IconButton(
                             icon: const Icon(Icons.edit, color: Colors.teal),
                             onPressed: () {
-                              _editJob(job.id, data); // Navigate to edit page
+                              _editJob(job.id, data);
                             },
                           )
                               : const SizedBox.shrink(),
@@ -267,4 +527,3 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     );
   }
 }
-

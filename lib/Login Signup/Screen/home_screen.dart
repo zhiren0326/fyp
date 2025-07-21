@@ -26,7 +26,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   static final List<Widget> _screens = [
     const ActivityLogScreen(), // Index 0: Home
     const CalendarPage(),      // Index 1: Calendar
-    const ReportScreen(),      // Index 2: Report
+    const ChatScreen(),      // Index 2: Report
     const SettingsScreen(),    // Index 3: Settings
     AccountPage(),             // Index 4: Account
   ];
