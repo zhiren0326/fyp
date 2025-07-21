@@ -1,14 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
+import 'package:fyp/Add%20Job%20Module/EditingJobsPage.dart';
 import 'package:fyp/Notification%20Module/NotificationScreen.dart';
-import 'package:fyp/CalendarPage/CalendarPage.dart'; // Import CalendarPage
+import 'package:fyp/CalendarPage/CalendarPage.dart';
 import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Chat.dart';
 import 'package:fyp/module/Settings.dart';
 import '../../Login With Google/google_auth.dart';
 import 'login.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class HomeScreen extends StatefulWidget {
   final int initialIndex;
@@ -22,19 +26,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int _selectedIndex = 0;
   late AnimationController _controller;
   late Animation<Offset> _offsetAnimation;
+  List<String> _latestPostedJobIds = [];
+  List<String> _userCreatedJobIds = [];
 
   static final List<Widget> _screens = [
-    const ActivityLogScreen(), // Index 0: Home
-    const CalendarPage(),      // Index 1: Calendar
-    const ChatScreen(),      // Index 2: Report
-    const SettingsScreen(),    // Index 3: Settings
-    AccountPage(),             // Index 4: Account
+    const ActivityLogScreen(),
+    const CalendarPage(),
+    const ChatScreen(),
+    const SettingsScreen(),
+    AccountPage(),
   ];
 
   @override
   void initState() {
     super.initState();
-    _selectedIndex = widget.initialIndex; // Set initial index from constructor
+    _selectedIndex = widget.initialIndex;
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -43,6 +49,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       begin: const Offset(-1, 0),
       end: const Offset(0, 0),
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+    _listenToPostedJobs();
+    _listenToUserCreatedJobs();
     print('AnimationController initialized. Initial index: $_selectedIndex');
   }
 
@@ -56,6 +64,88 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     setState(() {
       _selectedIndex = index;
       print('Selected index updated to: $index');
+    });
+  }
+
+  void _listenToPostedJobs() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    FirebaseFirestore.instance
+        .collection('jobs')
+        .where('postedBy', isEqualTo: currentUser.uid)
+        .where('editedAt', isEqualTo: null)
+        .orderBy('postedAt', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+      print('Posted jobs snapshot: ${snapshot.docs.map((d) => d.id)}');
+      if (snapshot.docs.isNotEmpty) {
+        final jobIds = snapshot.docs.map((doc) => doc.id).toList();
+        if (!listEquals(_latestPostedJobIds, jobIds)) {
+          setState(() {
+            _latestPostedJobIds = jobIds;
+          });
+        }
+      } else {
+        setState(() {
+          _latestPostedJobIds = [];
+        });
+      }
+    }, onError: (e) {
+      print('Error listening to posted jobs: $e');
+    });
+  }
+
+  void _listenToUserCreatedJobs() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    FirebaseFirestore.instance
+        .collection('jobs')
+        .where('postedBy', isEqualTo: currentUser.uid)
+        .orderBy('postedAt', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+      print('User created jobs snapshot: ${snapshot.docs.map((d) => d.id)}');
+      if (snapshot.docs.isNotEmpty) {
+        final jobIds = snapshot.docs.map((doc) => doc.id).toList();
+        if (!listEquals(_userCreatedJobIds, jobIds)) {
+          setState(() {
+            _userCreatedJobIds = jobIds;
+          });
+        }
+      } else {
+        setState(() {
+          _userCreatedJobIds = [];
+        });
+      }
+    }, onError: (e) {
+      print('Error listening to user created jobs: $e');
+    });
+  }
+
+  void _editJob(String jobId) {
+    FirebaseFirestore.instance
+        .collection('jobs')
+        .doc(jobId)
+        .get()
+        .then((doc) {
+      if (doc.exists) {
+        final data = doc.data() as Map<String, dynamic>;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => AddJobPage(jobId: jobId, initialData: data),
+          ),
+        ).then((_) {
+          _listenToUserCreatedJobs(); // Refresh after editing
+        });
+      }
+    }).catchError((e) {
+      print('Error fetching job for edit: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading job: $e')),
+      );
     });
   }
 
@@ -80,6 +170,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         ),
         actions: [
+          if (_userCreatedJobIds.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.task),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => EditingJobsPage(userCreatedJobIds: _userCreatedJobIds, onEditJob: _editJob),
+                  ),
+                );
+              },
+              color: Colors.white,
+              tooltip: 'View Your Tasks',
+            ),
           IconButton(
             icon: const Icon(Icons.notifications),
             onPressed: () {
@@ -87,7 +191,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 MaterialPageRoute(builder: (context) => const NotificationScreen()),
               );
             },
-          )
+            color: Colors.white,
+          ),
         ],
       ),
       drawer: SizedBox(
@@ -303,7 +408,7 @@ class AnimatedDrawer extends StatelessWidget {
             ),
             title: const Text('Profile'),
             onTap: () {
-              onItemTapped(1); // This should align with CalendarPage index
+              onItemTapped(1);
             },
           ),
           ListTile(

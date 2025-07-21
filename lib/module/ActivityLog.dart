@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -20,6 +21,8 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   String _searchQuery = '';
   List<String> _suggestedJobRoles = [];
   bool _enableAISuggestions = true;
+  String? _latestPostedJobId;
+  List<String> _userCreatedJobIds = [];
 
   @override
   void initState() {
@@ -32,6 +35,8 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         ),
       );
       _loadAISuggestionPreference();
+      _listenToPostedJobs();
+      _listenToUserCreatedJobs();
     });
   }
 
@@ -169,7 +174,86 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
       MaterialPageRoute(
         builder: (context) => AddJobPage(jobId: jobId, initialData: data),
       ),
-    );
+    ).then((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Job edited successfully')),
+      );
+      _listenToUserCreatedJobs(); // Refresh after editing
+    });
+  }
+
+  void _listenToPostedJobs() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    FirebaseFirestore.instance
+        .collection('jobs')
+        .where('postedBy', isEqualTo: currentUser.uid)
+        .orderBy('postedAt', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+      print('Posted jobs snapshot: ${snapshot.docs.map((d) => d.id)}');
+      if (snapshot.docs.isNotEmpty) {
+        final latestJob = snapshot.docs.first;
+        final jobId = latestJob.id;
+        if (_latestPostedJobId != jobId) {
+          setState(() {
+            _latestPostedJobId = jobId;
+          });
+        }
+      } else {
+        setState(() {
+          _latestPostedJobId = null;
+        });
+      }
+    }, onError: (e) {
+      print('Error listening to posted jobs: $e');
+    });
+  }
+
+  void _listenToUserCreatedJobs() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    FirebaseFirestore.instance
+        .collection('jobs')
+        .where('postedBy', isEqualTo: currentUser.uid)
+        .orderBy('postedAt', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+      print('User created jobs snapshot: ${snapshot.docs.map((d) => d.id)}');
+      if (snapshot.docs.isNotEmpty) {
+        final jobIds = snapshot.docs.map((doc) => doc.id).toList();
+        if (!listEquals(_userCreatedJobIds, jobIds)) {
+          setState(() {
+            _userCreatedJobIds = jobIds;
+          });
+        }
+      } else {
+        setState(() {
+          _userCreatedJobIds = [];
+        });
+      }
+    }, onError: (e) {
+      print('Error listening to user created jobs: $e');
+    });
+  }
+
+  void _removeJob(String jobId) {
+    FirebaseFirestore.instance.collection('jobs').doc(jobId).delete().then((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Job removed successfully')),
+      );
+      setState(() {
+        _userCreatedJobIds.remove(jobId);
+      });
+    }).catchError((e) {
+      print('Error removing job: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error removing job: $e')),
+      );
+    });
   }
 
   @override
@@ -186,6 +270,19 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
       ),
       child: Scaffold(
         backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          title: Text(
+            'Activities',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: Colors.black,
+            ),
+          ),
+          centerTitle: true,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+        ),
         body: ListView(
           padding: const EdgeInsets.only(top: 20, bottom: 80),
           children: [
@@ -312,7 +409,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                   final jobs = snapshot.data!.docs.where((doc) {
                     final data = doc.data() as Map<String, dynamic>;
                     final isAccepted = data['isAccepted'] == true;
-                    if (isAccepted) return false;
+                    if (isAccepted || data['postedBy'] == currentUser.uid) return false;
                     final jobPosition = data['jobPosition']?.toString().toLowerCase() ?? '';
                     return _suggestedJobRoles.any((role) => jobPosition.contains(role.toLowerCase()));
                   }).toList();
@@ -416,7 +513,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                 final jobs = snapshot.data!.docs.where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   final isAccepted = data['isAccepted'] == true;
-                  if (isAccepted) return false;
+                  if (isAccepted || data['postedBy'] == currentUser.uid) return false;
                   final jobPosition = data['jobPosition']?.toString().toLowerCase() ?? '';
                   List<String> requiredSkills = [];
                   var skillData = data['requiredSkill'];
