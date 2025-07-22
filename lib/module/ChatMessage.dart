@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:translator/translator.dart';
+import 'dart:io';
 
 class ChatMessage extends StatefulWidget {
   final String currentUserCustomId;
@@ -22,17 +26,20 @@ class ChatMessage extends StatefulWidget {
 
 class _ChatMessageState extends State<ChatMessage> {
   final TextEditingController _messageController = TextEditingController();
+  final GoogleTranslator _translator = GoogleTranslator();
+  String _selectedLanguage = 'en'; // Default language
+  final List<String> _languages = [
+    'en', 'es', 'fr', 'de', 'it', 'ja', 'ko', 'zh-cn', 'ru', 'ar'
+  ]; // Supported languages
 
-  // Create or get chat room ID for one-on-one chat
   String _getChatRoomId(String customId1, String customId2) {
     return customId1.compareTo(customId2) < 0
         ? '${customId1}_$customId2'
         : '${customId2}_$customId1';
   }
 
-  // Send message and save for both users
-  Future<void> _sendMessage() async {
-    if (_messageController.text.isEmpty) return;
+  Future<void> _sendMessage({PlatformFile? file}) async {
+    if (_messageController.text.isEmpty && file == null) return;
 
     try {
       final chatRoomId = _getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId);
@@ -49,11 +56,28 @@ class _ChatMessageState extends State<ChatMessage> {
           .doc('profile')
           .get();
 
+      String? fileUrl;
+      String? fileName;
+      if (file != null) {
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child('chat_files')
+            .child(chatRoomId)
+            .child('${DateTime.now().millisecondsSinceEpoch}_${file.name}');
+
+        await storageRef.putFile(File(file.path!));
+        fileUrl = await storageRef.getDownloadURL();
+        fileName = file.name;
+      }
+
       final messageData = {
         'text': _messageController.text,
         'senderCustomId': widget.currentUserCustomId,
         'senderName': currentUserDoc['name'] ?? 'Unknown',
         'timestamp': FieldValue.serverTimestamp(),
+        'fileUrl': fileUrl,
+        'fileName': fileName,
+        'originalLanguage': 'en',
       };
 
       await FirebaseFirestore.instance.collection(collectionPath).add(messageData);
@@ -67,6 +91,29 @@ class _ChatMessageState extends State<ChatMessage> {
         ),
       );
     }
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles();
+      if (result != null) {
+        await _sendMessage(file: result.files.first);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to upload file: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<String> _translateMessage(String text, String targetLanguage) async {
+    if (text.isEmpty || targetLanguage == 'en') return text;
+    final translation = await _translator.translate(text, to: targetLanguage);
+    return translation.text;
   }
 
   @override
@@ -85,6 +132,28 @@ class _ChatMessageState extends State<ChatMessage> {
           icon: Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          DropdownButton<String>(
+            value: _selectedLanguage,
+            icon: Icon(Icons.translate, color: Colors.white),
+            dropdownColor: Colors.teal[800],
+            items: _languages.map((String lang) {
+              return DropdownMenuItem<String>(
+                value: lang,
+                child: Text(
+                  lang.toUpperCase(),
+                  style: TextStyle(color: Colors.white),
+                ),
+              );
+            }).toList(),
+            onChanged: (String? newValue) {
+              setState(() {
+                _selectedLanguage = newValue!;
+              });
+            },
+          ),
+          SizedBox(width: 10),
+        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -132,66 +201,97 @@ class _ChatMessageState extends State<ChatMessage> {
                     itemBuilder: (context, index) {
                       final message = messages[index];
                       final isMe = message['senderCustomId'] == widget.currentUserCustomId;
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundImage: widget.selectedUserPhotoURL.startsWith('assets/')
-                              ? AssetImage(widget.selectedUserPhotoURL) as ImageProvider
-                              : NetworkImage(widget.selectedUserPhotoURL),
-                          radius: 20,
-                          onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
-                        ),
-                        title: Container(
-                          padding: const EdgeInsets.all(16),
-                          margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
-                          decoration: BoxDecoration(
-                            color: isMe
-                                ? Colors.teal[100]!.withOpacity(0.9)
-                                : Colors.white.withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black12,
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment:
-                            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                message['senderName'] ?? 'Unknown',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.teal[800],
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                message['text'],
-                                style: TextStyle(
-                                  color: Colors.teal[900],
-                                  fontSize: 18,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 6, left: 20, right: 20),
-                          child: Text(
-                            message['timestamp'] != null
-                                ? DateFormat('hh:mm a')
-                                .format((message['timestamp'] as Timestamp).toDate())
-                                : '',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.teal[600],
+
+                      return FutureBuilder<String>(
+                        future: _translateMessage(message['text'] ?? '', _selectedLanguage),
+                        builder: (context, snapshot) {
+                          final translatedText = snapshot.data ?? message['text'] ?? '';
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundImage: widget.selectedUserPhotoURL.startsWith('assets/')
+                                  ? AssetImage(widget.selectedUserPhotoURL) as ImageProvider
+                                  : NetworkImage(widget.selectedUserPhotoURL),
+                              radius: 20,
+                              onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
                             ),
-                          ),
-                        ),
+                            title: Container(
+                              padding: const EdgeInsets.all(16),
+                              margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
+                              decoration: BoxDecoration(
+                                color: isMe
+                                    ? Colors.teal[100]!.withOpacity(0.9)
+                                    : Colors.white.withOpacity(0.9),
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black12,
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment:
+                                isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    message['senderName'] ?? 'Unknown',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.teal[800],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  if (translatedText.isNotEmpty)
+                                    Text(
+                                      translatedText,
+                                      style: TextStyle(
+                                        color: Colors.teal[900],
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                  if (message['fileUrl'] != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: InkWell(
+                                        onTap: () {
+                                          // Implement file download/view logic here
+                                        },
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.attach_file, color: Colors.teal[800]),
+                                            SizedBox(width: 8),
+                                            Text(
+                                              message['fileName'] ?? 'File',
+                                              style: TextStyle(
+                                                color: Colors.teal[800],
+                                                decoration: TextDecoration.underline,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 6, left: 20, right: 20),
+                              child: Text(
+                                message['timestamp'] != null
+                                    ? DateFormat('hh:mm a')
+                                    .format((message['timestamp'] as Timestamp).toDate())
+                                    : '',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.teal[600],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       );
                     },
                   );
@@ -202,6 +302,10 @@ class _ChatMessageState extends State<ChatMessage> {
               padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
               child: Row(
                 children: [
+                  IconButton(
+                    icon: Icon(Icons.attach_file, color: Colors.teal[800], size: 28),
+                    onPressed: _pickFile,
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _messageController,

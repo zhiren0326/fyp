@@ -64,6 +64,13 @@ dependencies:
   uuid: ^4.5.1
   flutter_dotenv: ^5.0.2
   share_plus: ^11.0.0
+  agora_rtc_engine: ^6.3.0
+  googleapis: ^11.0.0
+  record: ^6.0.0
+  path_provider: ^2.1.1
+  audioplayers: ^6.5.0
+  translator: ^1.0.3+1
+
 
 
 
