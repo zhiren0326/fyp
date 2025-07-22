@@ -8,7 +8,8 @@ import 'package:fyp/SetttingsPage/reportproblem.dart';
 import 'package:fyp/SetttingsPage/termspolicies.dart';
 import 'package:fyp/module/Profile.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:fyp/module/SkillTags.dart'; // Added for Firebase Authentication
+import 'package:fyp/module/SkillTags.dart';
+import 'package:fyp/module/report.dart'; // Added for Firebase Authentication
 
 
 class AccountPage extends StatelessWidget {

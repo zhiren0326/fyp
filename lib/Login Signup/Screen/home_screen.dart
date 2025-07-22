@@ -10,10 +10,9 @@ import 'package:fyp/Reward%20Module/RewardPage.dart';
 import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Chat.dart';
-import 'package:fyp/module/Settings.dart';
 import '../../Login With Google/google_auth.dart';
 import 'login.dart';
-import 'package:google_fonts/google_fonts.dart';
+
 
 class HomeScreen extends StatefulWidget {
   final int initialIndex;
@@ -404,9 +403,9 @@ class AnimatedDrawer extends StatelessWidget {
             leading: CircleAvatar(
               radius: 15,
               backgroundColor: Colors.red[200],
-              child: const Icon(Icons.person, size: 18, color: Colors.red),
+              child: const Icon(Icons.calendar_month, size: 18, color: Colors.red),
             ),
-            title: const Text('Profile'),
+            title: const Text('Calendar'),
             onTap: () {
               onItemTapped(1);
             },
@@ -415,9 +414,9 @@ class AnimatedDrawer extends StatelessWidget {
             leading: CircleAvatar(
               radius: 15,
               backgroundColor: Colors.pink[200],
-              child: const Icon(Icons.local_offer, size: 18, color: Colors.pink),
+              child: const Icon(Icons.chat, size: 18, color: Colors.pink),
             ),
-            title: const Text('Skill Tags'),
+            title: const Text('Chat'),
             onTap: () {
               onItemTapped(2);
             },
@@ -428,7 +427,7 @@ class AnimatedDrawer extends StatelessWidget {
               backgroundColor: Colors.purple[200],
               child: const Icon(Icons.assessment, size: 18, color: Colors.purple),
             ),
-            title: const Text('Report'),
+            title: const Text('Reward'),
             onTap: () {
               onItemTapped(3);
             },

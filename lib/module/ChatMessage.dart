@@ -1,3 +1,4 @@
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
@@ -8,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as path;
+import 'package:permission_handler/permission_handler.dart';
 
 class ChatMessage extends StatefulWidget {
   final String currentUserCustomId;
@@ -32,26 +34,228 @@ class _ChatMessageState extends State<ChatMessage> {
   final AudioRecorder _recorder = AudioRecorder();
   final ScrollController _scrollController = ScrollController();
   static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo';
-  String _selectedLanguage = 'en'; // Default language
+  static const String _agoraAppId = '<664e8245651b4e39bbcda74d210eb5a0>'; // Replace with your Agora App ID
+  String _selectedLanguage = 'en';
   final List<String> _languages = [
     'en', 'es', 'fr', 'de', 'it', 'ja', 'ko', 'zh-cn', 'ru', 'ar'
-  ]; // Supported languages
+  ];
   bool _isRecording = false;
   String? _recordedFilePath;
   bool _isGroup = false;
+  bool _isGroupOwner = false;
+  RtcEngine? _agoraEngine;
+  bool _isInCall = false;
+  bool _isVideoCall = false;
+  int? _remoteUid;
+  bool _isAgoraInitialized = false;
 
   @override
   void initState() {
     super.initState();
     _checkIfGroup();
+    _checkIfGroupOwner();
+    _initializeAgora();
+  }
+
+  Future<void> _initializeAgora() async {
+    print('Starting Agora initialization at ${DateTime.now()}');
+    bool granted = await _requestPermissions();
+    if (granted) {
+      print('Permissions granted, initializing Agora engine');
+      _initializeAgoraEngine();
+      if (_agoraEngine != null) {
+        _isAgoraInitialized = true;
+        print('Agora engine initialized successfully');
+        _joinChannel();
+      } else {
+        print('Agora engine initialization failed');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to initialize Agora engine. Check App ID and permissions.'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } else {
+      print('Permissions not granted, requesting again');
+      _showPermissionRequestDialog();
+    }
   }
 
   @override
   void dispose() {
+    _cleanupAgoraEngine();
     _messageController.dispose();
     _recorder.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<bool> _requestPermissions() async {
+    var statuses = await [
+      Permission.camera,
+      Permission.microphone,
+      Permission.storage,
+    ].request();
+    print('Permission statuses: camera=${statuses[Permission.camera]}, microphone=${statuses[Permission.microphone]}, storage=${statuses[Permission.storage]}');
+    return statuses[Permission.camera]!.isGranted &&
+        statuses[Permission.microphone]!.isGranted &&
+        statuses[Permission.storage]!.isGranted;
+  }
+
+  void _showPermissionRequestDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Permissions Required'),
+        content: const Text('This app needs camera, microphone, and storage permissions to enable voice and video calls. Please grant them in the settings.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              openAppSettings();
+              Navigator.pop(context);
+              _initializeAgora(); // Retry after settings change
+            },
+            child: const Text('Open Settings'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _initializeAgoraEngine() {
+    try {
+      print('Creating Agora engine with App ID: $_agoraAppId');
+      _agoraEngine = createAgoraRtcEngine();
+      _agoraEngine!.initialize(const RtcEngineContext(
+        appId: _agoraAppId,
+        channelProfile: ChannelProfileType.channelProfileCommunication,
+      ));
+      print('Agora engine initialized, registering event handler');
+      _agoraEngine!.registerEventHandler(RtcEngineEventHandler(
+        onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
+          setState(() {
+            _isInCall = true;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Joined channel ${widget.selectedCustomId}'),
+              backgroundColor: Colors.teal[700],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        },
+        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
+          setState(() {
+            _remoteUid = remoteUid;
+          });
+          _setupRemoteVideo(remoteUid);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('User $remoteUid joined'),
+              backgroundColor: Colors.teal[700],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        },
+        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
+          setState(() {
+            _remoteUid = null;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('User $remoteUid offline'),
+              backgroundColor: Colors.teal[700],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        },
+        onError: (ErrorCodeType err, String msg) {
+          print('Agora error: $err, $msg');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Agora error: $msg'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        },
+      ));
+
+      _agoraEngine!.enableVideo();
+      _agoraEngine!.startPreview();
+      _setupLocalVideo();
+    } catch (e) {
+      print('Exception during Agora initialization: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to initialize Agora: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  void _joinChannel() {
+    if (!_isAgoraInitialized || _agoraEngine == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Agora engine not initialized'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    try {
+      String token = '<Your token>'; // Replace with temporary token or fetch dynamically
+      ChannelMediaOptions options = const ChannelMediaOptions(
+        clientRoleType: ClientRoleType.clientRoleBroadcaster,
+        channelProfile: ChannelProfileType.channelProfileCommunication,
+        publishCameraTrack: true,
+        publishMicrophoneTrack: true,
+      );
+      print('Joining channel: ${widget.selectedCustomId} with token: $token');
+      _agoraEngine!.joinChannel(
+        token: token,
+        channelId: widget.selectedCustomId,
+        uid: 0,
+        options: options,
+      );
+    } catch (e) {
+      print('Exception during channel join: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to join channel: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  void _setupLocalVideo() {
+    // Local video setup can be handled in the call dialog for simplicity
+  }
+
+  void _setupRemoteVideo(int uid) {
+    // Remote video is handled in the call dialog
+  }
+
+  void _cleanupAgoraEngine() {
+    if (_agoraEngine != null) {
+      _agoraEngine!.stopPreview();
+      _agoraEngine!.leaveChannel();
+      _agoraEngine!.release();
+    }
   }
 
   Future<void> _checkIfGroup() async {
@@ -61,6 +265,18 @@ class _ChatMessageState extends State<ChatMessage> {
         .get();
     setState(() {
       _isGroup = groupDoc.exists;
+    });
+  }
+
+  Future<void> _checkIfGroupOwner() async {
+    if (!_isGroup) return;
+    final groupDoc = await FirebaseFirestore.instance
+        .collection('groups')
+        .doc(widget.selectedCustomId)
+        .get();
+    final ownerId = groupDoc['ownerCustomId'];
+    setState(() {
+      _isGroupOwner = ownerId == widget.currentUserCustomId;
     });
   }
 
@@ -95,12 +311,11 @@ class _ChatMessageState extends State<ChatMessage> {
       if (file != null) {
         final fileBytes = await File(file.path!).readAsBytes();
         if (fileBytes.length > 500 * 1024) {
-          // Limit to 500KB
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('File size exceeds 500KB limit.'),
-              backgroundColor: Colors.red[700],
-              duration: const Duration(seconds: 3),
+            const SnackBar(
+              content: Text('File size exceeds 500KB limit.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
             ),
           );
           return;
@@ -113,12 +328,11 @@ class _ChatMessageState extends State<ChatMessage> {
       if (voicePath != null) {
         final voiceBytes = await File(voicePath).readAsBytes();
         if (voiceBytes.length > 500 * 1024) {
-          // Limit to 500KB
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Voice file size exceeds 500KB limit.'),
-              backgroundColor: Colors.red[700],
-              duration: const Duration(seconds: 3),
+            const SnackBar(
+              content: Text('Voice file size exceeds 500KB limit.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
             ),
           );
           return;
@@ -143,14 +357,12 @@ class _ChatMessageState extends State<ChatMessage> {
       };
 
       if (_isGroup) {
-        // Store message in group messages collection
         await FirebaseFirestore.instance
             .collection('groups')
             .doc(widget.selectedCustomId)
             .collection('messages')
             .add(messageData);
 
-        // Update last message for all group members
         final memberDocs = await FirebaseFirestore.instance
             .collection('groups')
             .doc(widget.selectedCustomId)
@@ -173,12 +385,10 @@ class _ChatMessageState extends State<ChatMessage> {
           }, SetOptions(merge: true));
         }
       } else {
-        // Store message for one-to-one chat
         final chatRoomId = _getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId);
         final collectionPath = 'chat_rooms/$chatRoomId/messages';
         await FirebaseFirestore.instance.collection(collectionPath).add(messageData);
 
-        // Update last message for both users
         final recipientUserId = (await FirebaseFirestore.instance
             .collection('custom_ids')
             .where('customId', isEqualTo: widget.selectedCustomId)
@@ -205,7 +415,7 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to send message: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -227,7 +437,7 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to upload file: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -235,6 +445,17 @@ class _ChatMessageState extends State<ChatMessage> {
   }
 
   Future<void> _togglePinMessage(String messageId) async {
+    if (!_isGroupOwner) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Only the group owner can pin/unpin messages.'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     try {
       final collectionPath = _isGroup
           ? 'groups/${widget.selectedCustomId}/messages'
@@ -247,11 +468,282 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to pin/unpin message: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
     }
+  }
+
+  void _showPinMessageDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(
+            'Select Messages to Pin',
+            style: TextStyle(color: Colors.teal[800], fontWeight: FontWeight.bold),
+          ),
+          content: Container(
+            width: double.maxFinite,
+            height: 400,
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('groups')
+                  .doc(widget.selectedCustomId)
+                  .collection('messages')
+                  .orderBy('timestamp', descending: true)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.teal),
+                    ),
+                  );
+                }
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return Center(
+                    child: Text(
+                      'No messages available',
+                      style: TextStyle(color: Colors.teal[800]),
+                    ),
+                  );
+                }
+
+                final messages = snapshot.data!.docs;
+                return ListView.builder(
+                  itemCount: messages.length,
+                  itemBuilder: (context, index) {
+                    final message = messages[index];
+                    final isPinned = message['isPinned'] ?? false;
+                    return FutureBuilder<String>(
+                      future: _translateMessage(message['text'] ?? '', _selectedLanguage),
+                      builder: (context, snapshot) {
+                        final translatedText = snapshot.data ?? message['text'] ?? '';
+                        return CheckboxListTile(
+                          title: Text(
+                            translatedText.isNotEmpty ? translatedText : 'Media Message',
+                            style: TextStyle(color: Colors.teal[900]),
+                          ),
+                          subtitle: Text(
+                            message['senderName'] ?? 'Unknown',
+                            style: TextStyle(color: Colors.teal[600]),
+                          ),
+                          value: isPinned,
+                          onChanged: (bool? value) {
+                            _togglePinMessage(message.id);
+                          },
+                          activeColor: Colors.teal[800],
+                          secondary: Icon(
+                            isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                            color: Colors.teal[800],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(
+                'Close',
+                style: TextStyle(color: Colors.teal[800]),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _startVoiceCall() async {
+    if (!_isAgoraInitialized || _agoraEngine == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Agora engine not initialized'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    if (_isInCall) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Already in a call.'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await _agoraEngine!.enableAudio();
+      await _agoraEngine!.disableVideo();
+      _joinChannel();
+      setState(() {
+        _isInCall = true;
+        _isVideoCall = false;
+      });
+      _showCallDialog(false);
+    } catch (e) {
+      print('Voice call error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to start voice call: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _startVideoCall() async {
+    if (!_isAgoraInitialized || _agoraEngine == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Agora engine not initialized'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    if (_isInCall) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Already in a call.'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await _agoraEngine!.enableVideo();
+      await _agoraEngine!.enableAudio();
+      _joinChannel();
+      setState(() {
+        _isInCall = true;
+        _isVideoCall = true;
+      });
+      _showCallDialog(true);
+    } catch (e) {
+      print('Video call error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to start video call: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _endCall() async {
+    if (!_isAgoraInitialized || _agoraEngine == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Agora engine not initialized'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await _agoraEngine!.leaveChannel();
+      setState(() {
+        _isInCall = false;
+        _isVideoCall = false;
+        _remoteUid = null;
+      });
+      Navigator.of(context).pop(); // Close the call dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Call ended'),
+          backgroundColor: Colors.teal[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      print('End call error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to end call: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  void _showCallDialog(bool isVideoCall) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(
+            isVideoCall ? 'Video Call' : 'Voice Call',
+            style: TextStyle(color: Colors.teal[800], fontWeight: FontWeight.bold),
+          ),
+          content: Container(
+            width: double.maxFinite,
+            height: 300,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'In call with ${widget.selectedUserName}',
+                  style: TextStyle(color: Colors.teal[800], fontSize: 18),
+                ),
+                const SizedBox(height: 20),
+                if (isVideoCall && _remoteUid != null)
+                  Expanded(
+                    child: AgoraVideoView(
+                      controller: VideoViewController(
+                        rtcEngine: _agoraEngine!,
+                        canvas: VideoCanvas(uid: _remoteUid),
+                      ),
+                    ),
+                  )
+                else if (isVideoCall)
+                  Text(
+                    'Waiting for remote user...',
+                    style: TextStyle(color: Colors.teal[600]),
+                  )
+                else
+                  Icon(
+                    Icons.call,
+                    size: 100,
+                    color: Colors.teal[800],
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: _endCall,
+              child: Text(
+                'End Call',
+                style: TextStyle(color: Colors.red[700]),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _startRecording() async {
@@ -271,7 +763,7 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Recording permission denied: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -293,7 +785,7 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to process recording: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -335,7 +827,7 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Voice transcription/translation error: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -350,8 +842,7 @@ class _ChatMessageState extends State<ChatMessage> {
       if (file.extension == 'txt') {
         content = utf8.decode(fileBytes);
       } else if (file.extension == 'pdf') {
-        // Note: PDF parsing requires additional packages like `pdf_text`
-        content = 'PDF content extraction not implemented'; // Placeholder
+        content = 'PDF content extraction not implemented';
       }
 
       if (_selectedLanguage == 'en') return content;
@@ -380,7 +871,7 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('File translation error: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -415,18 +906,18 @@ class _ChatMessageState extends State<ChatMessage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Translation error: $e'),
-          backgroundColor: Colors.red[700],
+          backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
       );
-      return text; // Fallback to original text
+      return text;
     }
   }
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
-        0.0, // Reverse list, so scroll to 0 for newest messages
+        0.0,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
@@ -446,31 +937,31 @@ class _ChatMessageState extends State<ChatMessage> {
                   ? MemoryImage(base64Decode(widget.selectedUserPhotoURL.split(',')[1]))
                   : NetworkImage(widget.selectedUserPhotoURL)) as ImageProvider,
               radius: 20,
-              onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
+              onBackgroundImageError: (exception, stackTrace) => AssetImage('assets/default_avatar.png'),
             ),
             const SizedBox(width: 10),
             Text(
               widget.selectedUserName,
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
             ),
           ],
         ),
         backgroundColor: Colors.teal[800],
         leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: Colors.white),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
           DropdownButton<String>(
             value: _selectedLanguage,
-            icon: Icon(Icons.translate, color: Colors.white),
+            icon: const Icon(Icons.translate, color: Colors.white),
             dropdownColor: Colors.teal[800],
             items: _languages.map((String lang) {
               return DropdownMenuItem<String>(
                 value: lang,
                 child: Text(
                   lang.toUpperCase(),
-                  style: TextStyle(color: Colors.white),
+                  style: const TextStyle(color: Colors.white),
                 ),
               );
             }).toList(),
@@ -480,19 +971,181 @@ class _ChatMessageState extends State<ChatMessage> {
               });
             },
           ),
-          SizedBox(width: 10),
+          const SizedBox(width: 10),
         ],
       ),
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [const Color(0xFFB2DFDB), Colors.white],
+            colors: [Color(0xFFB2DFDB), Colors.white],
           ),
         ),
         child: Column(
           children: [
+            if (_isGroup) // Pinned messages section for groups
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('groups')
+                    .doc(widget.selectedCustomId)
+                    .collection('messages')
+                    .where('isPinned', isEqualTo: true)
+                    .orderBy('timestamp', descending: true)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const SizedBox.shrink();
+                  }
+                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  final pinnedMessages = snapshot.data!.docs;
+                  return Container(
+                    color: Colors.yellow[100]?.withOpacity(0.8),
+                    padding: const EdgeInsets.all(8.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Pinned Messages',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.teal[800],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...pinnedMessages.map((message) {
+                          return FutureBuilder<String>(
+                            future: _translateMessage(message['text'] ?? '', _selectedLanguage),
+                            builder: (context, snapshot) {
+                              final translatedText = snapshot.data ?? message['text'] ?? '';
+                              return Container(
+                                padding: const EdgeInsets.all(12),
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.9),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.yellow[700]!, width: 2),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      message['senderName'] ?? 'Unknown',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.teal[800],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    if (translatedText.isNotEmpty)
+                                      Text(
+                                        translatedText,
+                                        style: TextStyle(
+                                          color: Colors.teal[900],
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    if (message['fileBase64'] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: InkWell(
+                                          onTap: () async {
+                                            try {
+                                              final bytes = base64Decode(message['fileBase64']);
+                                              final directory = await getTemporaryDirectory();
+                                              final file = File('${directory.path}/${message['fileName']}');
+                                              await file.writeAsBytes(bytes);
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('File downloaded to ${file.path}'),
+                                                  backgroundColor: Colors.teal[700],
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('Failed to download file: $e'),
+                                                  backgroundColor: Colors.red,
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.attach_file, color: Colors.teal[800]),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                message['fileName'] ?? 'File',
+                                                style: TextStyle(
+                                                  color: Colors.teal[800],
+                                                  decoration: TextDecoration.underline,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    if (message['voiceBase64'] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: InkWell(
+                                          onTap: () async {
+                                            try {
+                                              final bytes = base64Decode(message['voiceBase64']);
+                                              final directory = await getTemporaryDirectory();
+                                              final file = File('${directory.path}/${message['voiceFileName']}');
+                                              await file.writeAsBytes(bytes);
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('Voice file downloaded to ${file.path}'),
+                                                  backgroundColor: Colors.teal[700],
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('Failed to download voice: $e'),
+                                                  backgroundColor: Colors.red,
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.mic, color: Colors.teal[800]),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                'Voice Message',
+                                                style: TextStyle(
+                                                  color: Colors.teal[800],
+                                                  decoration: TextDecoration.underline,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            },
+                          );
+                        }).toList(),
+                      ],
+                    ),
+                  );
+                },
+              ),
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
                 stream: _isGroup
@@ -503,8 +1156,7 @@ class _ChatMessageState extends State<ChatMessage> {
                     .orderBy('timestamp', descending: true)
                     .snapshots()
                     : FirebaseFirestore.instance
-                    .collection(
-                    'chat_rooms/${_getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId)}/messages')
+                    .collection('chat_rooms/${_getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId)}/messages')
                     .orderBy('timestamp', descending: true)
                     .snapshots(),
                 builder: (context, snapshot) {
@@ -549,28 +1201,26 @@ class _ChatMessageState extends State<ChatMessage> {
                               backgroundImage: widget.selectedUserPhotoURL.startsWith('assets/')
                                   ? AssetImage(widget.selectedUserPhotoURL)
                                   : (widget.selectedUserPhotoURL.startsWith('data:image')
-                                  ? MemoryImage(
-                                  base64Decode(widget.selectedUserPhotoURL.split(',')[1]))
+                                  ? MemoryImage(base64Decode(widget.selectedUserPhotoURL.split(',')[1]))
                                   : NetworkImage(widget.selectedUserPhotoURL)) as ImageProvider,
                               radius: 20,
-                              onBackgroundImageError: (_, __) =>
-                                  AssetImage('assets/default_avatar.png'),
+                              onBackgroundImageError: (exception, stackTrace) => AssetImage('assets/default_avatar.png'),
                             ),
                             title: GestureDetector(
-                              onLongPress: () => _togglePinMessage(message.id),
+                              onLongPress: _isGroup && _isGroupOwner ? () => _togglePinMessage(message.id) : null,
                               child: Container(
                                 padding: const EdgeInsets.all(16),
                                 margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
                                 decoration: BoxDecoration(
                                   color: isMe
-                                      ? Colors.teal[100]!.withOpacity(0.9)
+                                      ? Colors.teal[100]?.withOpacity(0.9)
                                       : Colors.white.withOpacity(0.9),
                                   borderRadius: BorderRadius.circular(20),
-                                  boxShadow: [
+                                  boxShadow: const [
                                     BoxShadow(
                                       color: Colors.black12,
                                       blurRadius: 4,
-                                      offset: const Offset(0, 2),
+                                      offset: Offset(0, 2),
                                     ),
                                   ],
                                   border: isPinned
@@ -578,8 +1228,7 @@ class _ChatMessageState extends State<ChatMessage> {
                                       : null,
                                 ),
                                 child: Column(
-                                  crossAxisAlignment:
-                                  isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       message['senderName'] ?? 'Unknown',
@@ -606,13 +1255,11 @@ class _ChatMessageState extends State<ChatMessage> {
                                             try {
                                               final bytes = base64Decode(message['fileBase64']);
                                               final directory = await getTemporaryDirectory();
-                                              final file =
-                                              File('${directory.path}/${message['fileName']}');
+                                              final file = File('${directory.path}/${message['fileName']}');
                                               await file.writeAsBytes(bytes);
                                               ScaffoldMessenger.of(context).showSnackBar(
                                                 SnackBar(
-                                                  content:
-                                                  Text('File downloaded to ${file.path}'),
+                                                  content: Text('File downloaded to ${file.path}'),
                                                   backgroundColor: Colors.teal[700],
                                                   duration: const Duration(seconds: 3),
                                                 ),
@@ -621,7 +1268,7 @@ class _ChatMessageState extends State<ChatMessage> {
                                               ScaffoldMessenger.of(context).showSnackBar(
                                                 SnackBar(
                                                   content: Text('Failed to download file: $e'),
-                                                  backgroundColor: Colors.red[700],
+                                                  backgroundColor: Colors.red,
                                                   duration: const Duration(seconds: 3),
                                                 ),
                                               );
@@ -631,7 +1278,7 @@ class _ChatMessageState extends State<ChatMessage> {
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Icon(Icons.attach_file, color: Colors.teal[800]),
-                                              SizedBox(width: 8),
+                                              const SizedBox(width: 8),
                                               Text(
                                                 message['fileName'] ?? 'File',
                                                 style: TextStyle(
@@ -651,13 +1298,11 @@ class _ChatMessageState extends State<ChatMessage> {
                                             try {
                                               final bytes = base64Decode(message['voiceBase64']);
                                               final directory = await getTemporaryDirectory();
-                                              final file = File(
-                                                  '${directory.path}/${message['voiceFileName']}');
+                                              final file = File('${directory.path}/${message['voiceFileName']}');
                                               await file.writeAsBytes(bytes);
                                               ScaffoldMessenger.of(context).showSnackBar(
                                                 SnackBar(
-                                                  content:
-                                                  Text('Voice file downloaded to ${file.path}'),
+                                                  content: Text('Voice file downloaded to ${file.path}'),
                                                   backgroundColor: Colors.teal[700],
                                                   duration: const Duration(seconds: 3),
                                                 ),
@@ -666,7 +1311,7 @@ class _ChatMessageState extends State<ChatMessage> {
                                               ScaffoldMessenger.of(context).showSnackBar(
                                                 SnackBar(
                                                   content: Text('Failed to download voice: $e'),
-                                                  backgroundColor: Colors.red[700],
+                                                  backgroundColor: Colors.red,
                                                   duration: const Duration(seconds: 3),
                                                 ),
                                               );
@@ -676,7 +1321,7 @@ class _ChatMessageState extends State<ChatMessage> {
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Icon(Icons.mic, color: Colors.teal[800]),
-                                              SizedBox(width: 8),
+                                              const SizedBox(width: 8),
                                               Text(
                                                 'Voice Message',
                                                 style: TextStyle(
@@ -696,8 +1341,7 @@ class _ChatMessageState extends State<ChatMessage> {
                               padding: const EdgeInsets.only(top: 6, left: 20, right: 20),
                               child: Text(
                                 message['timestamp'] != null
-                                    ? DateFormat('hh:mm a')
-                                    .format((message['timestamp'] as Timestamp).toDate())
+                                    ? DateFormat('hh:mm a').format((message['timestamp'] as Timestamp).toDate())
                                     : 'Sending...',
                                 style: TextStyle(
                                   fontSize: 12,
@@ -720,7 +1364,24 @@ class _ChatMessageState extends State<ChatMessage> {
                   IconButton(
                     icon: Icon(Icons.attach_file, color: Colors.teal[800], size: 28),
                     onPressed: _pickFile,
+                    tooltip: 'Attach File',
                   ),
+                  IconButton(
+                    icon: Icon(Icons.videocam, color: Colors.teal[800], size: 28),
+                    onPressed: _isInCall ? _endCall : _startVideoCall,
+                    tooltip: _isInCall ? 'End Video Call' : 'Start Video Call',
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.call, color: Colors.teal[800], size: 28),
+                    onPressed: _isInCall ? _endCall : _startVoiceCall,
+                    tooltip: _isInCall ? 'End Voice Call' : 'Start Voice Call',
+                  ),
+                  if (_isGroup && _isGroupOwner)
+                    IconButton(
+                      icon: Icon(Icons.push_pin, color: Colors.teal[800], size: 28),
+                      onPressed: _showPinMessageDialog,
+                      tooltip: 'Manage Pinned Messages',
+                    ),
                   IconButton(
                     icon: Icon(
                       _isRecording ? Icons.stop : Icons.mic,
@@ -728,6 +1389,7 @@ class _ChatMessageState extends State<ChatMessage> {
                       size: 28,
                     ),
                     onPressed: _isRecording ? _stopRecording : _startRecording,
+                    tooltip: _isRecording ? 'Stop Recording' : 'Record Voice',
                   ),
                   Expanded(
                     child: TextField(
@@ -765,7 +1427,7 @@ class _ChatMessageState extends State<ChatMessage> {
                       padding: const EdgeInsets.all(16),
                       elevation: 4,
                     ),
-                    child: Icon(Icons.send, color: Colors.white, size: 28),
+                    child: const Icon(Icons.send, color: Colors.white, size: 28),
                   ),
                 ],
               ),
