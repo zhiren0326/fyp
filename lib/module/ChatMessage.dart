@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:translator/translator.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'dart:io';
 
 class ChatMessage extends StatefulWidget {
@@ -27,10 +30,60 @@ class ChatMessage extends StatefulWidget {
 class _ChatMessageState extends State<ChatMessage> {
   final TextEditingController _messageController = TextEditingController();
   final GoogleTranslator _translator = GoogleTranslator();
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo';
   String _selectedLanguage = 'en'; // Default language
   final List<String> _languages = [
     'en', 'es', 'fr', 'de', 'it', 'ja', 'ko', 'zh-cn', 'ru', 'ar'
   ]; // Supported languages
+  bool _isListening = false;
+  String _recognizedText = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeSpeech();
+  }
+
+  Future<void> _initializeSpeech() async {
+    try {
+      bool available = await _speech.initialize(
+        onStatus: (status) {
+          setState(() => _isListening = status == 'listening');
+          if (status == 'done') {
+            _speech.stop();
+          }
+        },
+        onError: (error) {
+          setState(() => _isListening = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Speech recognition error: ${error.errorMsg}'),
+              backgroundColor: Colors.red[700],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        },
+      );
+      if (!available) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Speech recognition not available. Please check microphone permissions.'),
+            backgroundColor: Colors.red[700],
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to initialize speech recognition: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
 
   String _getChatRoomId(String customId1, String customId2) {
     return customId1.compareTo(customId2) < 0
@@ -38,8 +91,9 @@ class _ChatMessageState extends State<ChatMessage> {
         : '${customId2}_$customId1';
   }
 
-  Future<void> _sendMessage({PlatformFile? file}) async {
-    if (_messageController.text.isEmpty && file == null) return;
+  Future<void> _sendMessage({PlatformFile? file, String? text}) async {
+    String messageText = text ?? _messageController.text;
+    if (messageText.isEmpty && file == null) return;
 
     try {
       final chatRoomId = _getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId);
@@ -56,32 +110,27 @@ class _ChatMessageState extends State<ChatMessage> {
           .doc('profile')
           .get();
 
-      String? fileUrl;
+      String? fileBase64;
       String? fileName;
       if (file != null) {
-        final storageRef = FirebaseStorage.instance
-            .ref()
-            .child('chat_files')
-            .child(chatRoomId)
-            .child('${DateTime.now().millisecondsSinceEpoch}_${file.name}');
-
-        await storageRef.putFile(File(file.path!));
-        fileUrl = await storageRef.getDownloadURL();
+        final fileBytes = await File(file.path!).readAsBytes();
+        fileBase64 = base64Encode(fileBytes);
         fileName = file.name;
       }
 
       final messageData = {
-        'text': _messageController.text,
+        'text': messageText,
         'senderCustomId': widget.currentUserCustomId,
         'senderName': currentUserDoc['name'] ?? 'Unknown',
         'timestamp': FieldValue.serverTimestamp(),
-        'fileUrl': fileUrl,
+        'fileBase64': fileBase64,
         'fileName': fileName,
         'originalLanguage': 'en',
       };
 
       await FirebaseFirestore.instance.collection(collectionPath).add(messageData);
       _messageController.clear();
+      setState(() => _recognizedText = '');
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -112,13 +161,91 @@ class _ChatMessageState extends State<ChatMessage> {
 
   Future<String> _translateMessage(String text, String targetLanguage) async {
     if (text.isEmpty || targetLanguage == 'en') return text;
-    final translation = await _translator.translate(text, to: targetLanguage);
-    return translation.text;
+    try {
+      final response = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'contents': [
+            {
+              'parts': [
+                {'text': 'Translate the following text to $targetLanguage: $text'}
+              ]
+            }
+          ]
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['candidates'][0]['content']['parts'][0]['text'];
+      } else {
+        throw Exception('Failed to translate: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Translation error: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return text; // Fallback to original text
+    }
+  }
+
+  Future<void> _startListening() async {
+    if (!_isListening) {
+      try {
+        bool available = await _speech.isAvailable;
+        if (!available) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Microphone not available. Please check permissions.'),
+              backgroundColor: Colors.red[700],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+          return;
+        }
+
+        await _speech.listen(
+          onResult: (result) async {
+            setState(() {
+              _recognizedText = result.recognizedWords;
+              _messageController.text = _recognizedText;
+            });
+            if (result.finalResult && _recognizedText.isNotEmpty) {
+              await Future.delayed(Duration(milliseconds: 500)); // Ensure stability
+              final translatedText = await _translateMessage(_recognizedText, _selectedLanguage);
+              await _sendMessage(text: translatedText);
+              await _speech.stop();
+            }
+          },
+          localeId: _selectedLanguage, // Use selected language for speech recognition
+          cancelOnError: true,
+          partialResults: true,
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to start speech recognition: $e'),
+            backgroundColor: Colors.red[700],
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        setState(() => _isListening = false);
+      }
+    } else {
+      await _speech.stop();
+      setState(() => _isListening = false);
+    }
   }
 
   @override
   void dispose() {
     _messageController.dispose();
+    _speech.stop();
     super.dispose();
   }
 
@@ -212,7 +339,8 @@ class _ChatMessageState extends State<ChatMessage> {
                                   ? AssetImage(widget.selectedUserPhotoURL) as ImageProvider
                                   : NetworkImage(widget.selectedUserPhotoURL),
                               radius: 20,
-                              onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
+                              onBackgroundImageError: (_, __) =>
+                                  AssetImage('assets/default_avatar.png'),
                             ),
                             title: Container(
                               padding: const EdgeInsets.all(16),
@@ -251,12 +379,35 @@ class _ChatMessageState extends State<ChatMessage> {
                                         fontSize: 18,
                                       ),
                                     ),
-                                  if (message['fileUrl'] != null)
+                                  if (message['fileBase64'] != null)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 8),
                                       child: InkWell(
-                                        onTap: () {
-                                          // Implement file download/view logic here
+                                        onTap: () async {
+                                          // Decode and save the file locally for viewing
+                                          try {
+                                            final bytes = base64Decode(message['fileBase64']);
+                                            final directory = await getTemporaryDirectory();
+                                            final file = File('${directory.path}/${message['fileName']}');
+                                            await file.writeAsBytes(bytes);
+                                            // Use a package like open_file to open the file
+                                            // For now, show a snackbar
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('File downloaded to ${file.path}'),
+                                                backgroundColor: Colors.teal[700],
+                                                duration: const Duration(seconds: 3),
+                                              ),
+                                            );
+                                          } catch (e) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('Failed to download file: $e'),
+                                                backgroundColor: Colors.red[700],
+                                                duration: const Duration(seconds: 3),
+                                              ),
+                                            );
+                                          }
                                         },
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
@@ -305,6 +456,14 @@ class _ChatMessageState extends State<ChatMessage> {
                   IconButton(
                     icon: Icon(Icons.attach_file, color: Colors.teal[800], size: 28),
                     onPressed: _pickFile,
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      _isListening ? Icons.mic : Icons.mic_none,
+                      color: Colors.teal[800],
+                      size: 28,
+                    ),
+                    onPressed: _startListening,
                   ),
                   Expanded(
                     child: TextField(

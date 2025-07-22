@@ -213,6 +213,16 @@ class _ChatScreenState extends State<ChatScreen> {
           duration: const Duration(seconds: 3),
         ),
       );
+
+      // Copy the group ID to clipboard
+      Clipboard.setData(ClipboardData(text: groupId));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Group ID $groupId copied to clipboard'),
+          backgroundColor: Colors.teal[700],
+          duration: const Duration(seconds: 2),
+        ),
+      );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -582,6 +592,74 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _showGroupMembers(String groupId) async {
+    try {
+      final memberDocs = await FirebaseFirestore.instance
+          .collection('groups')
+          .doc(groupId)
+          .collection('members')
+          .get();
+
+      final members = <Map<String, dynamic>>[];
+      for (var member in memberDocs.docs) {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(member['userId'])
+            .collection('profiledetails')
+            .doc('profile')
+            .get();
+        members.add({
+          'customId': member['customId'],
+          'name': userDoc['name'] ?? 'Unknown',
+        });
+      }
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Group Members'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: members.length,
+              itemBuilder: (context, index) {
+                final member = members[index];
+                return ListTile(
+                  title: Text(
+                    member['name'],
+                    style: TextStyle(
+                      color: Colors.teal[900],
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'ID: ${member['customId']}',
+                    style: TextStyle(color: Colors.teal[600]),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to load group members: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   Future<void> _searchUsers(String query) async {
     if (query.isEmpty) {
       setState(() {
@@ -735,105 +813,161 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                     const SizedBox(height: 16),
                     if (_currentUserCustomId != null)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            'Your ID: $_currentUserCustomId',
-                            style: TextStyle(
-                              color: Colors.teal[900],
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.8,
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.95),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          IconButton(
-                            icon: Icon(Icons.copy, color: Colors.teal[700], size: 28),
-                            onPressed: _copyCustomId,
-                            tooltip: 'Copy ID',
-                          ),
-                          IconButton(
-                            icon: Icon(Icons.share, color: Colors.teal[700], size: 28),
-                            onPressed: _shareCustomId,
-                            tooltip: 'Share ID',
-                          ),
-                        ],
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              'Your ID: $_currentUserCustomId',
+                              style: TextStyle(
+                                color: Colors.teal[900],
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            IconButton(
+                              icon: Icon(Icons.copy, color: Colors.teal[700], size: 28),
+                              onPressed: _copyCustomId,
+                              tooltip: 'Copy ID',
+                            ),
+                            IconButton(
+                              icon: Icon(Icons.share, color: Colors.teal[700], size: 28),
+                              onPressed: _shareCustomId,
+                              tooltip: 'Share ID',
+                            ),
+                          ],
+                        ),
                       ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     ElevatedButton.icon(
                       onPressed: _createGroup,
-                      icon: Icon(Icons.group_add, color: Colors.white),
-                      label: Text(
+                      icon: Icon(Icons.group_add, color: Colors.white, size: 28),
+                      label: const Text(
                         'Create Group Chat',
-                        style: TextStyle(color: Colors.white),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal[700],
+                        backgroundColor: Colors.teal[800],
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(20),
                         ),
-                        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                        elevation: 6,
+                        shadowColor: Colors.black26,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     if (_createdGroups.isNotEmpty)
                       Column(
                         children: _createdGroups.map((group) {
                           final groupId = group['groupId'];
                           return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 1.0),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  'Group: ${group['name']} ($groupId)',
-                                  style: TextStyle(
-                                    color: Colors.teal[900],
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w600,
+                            padding: const EdgeInsets.symmetric(vertical: 6.0),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black12,
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
                                   ),
-                                ),
-                                const SizedBox(width: 1),
-                                IconButton(
-                                  icon: Icon(Icons.copy, color: Colors.teal[700], size: 20),
-                                  onPressed: () => _copyGroupId(groupId),
-                                  tooltip: 'Copy Group ID',
-                                ),
-                                IconButton(
-                                  icon: Icon(Icons.share, color: Colors.teal[700], size: 20),
-                                  onPressed: () => _shareGroupId(groupId),
-                                  tooltip: 'Share Group ID',
-                                ),
-                                FutureBuilder<DocumentSnapshot>(
-                                  future: FirebaseFirestore.instance
-                                      .collection('groups')
-                                      .doc(groupId)
-                                      .get(),
-                                  builder: (context, snapshot) {
-                                    if (!snapshot.hasData || !snapshot.data!.exists) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    final isCreator = snapshot.data!['creatorId'] == currentUser?.uid;
-                                    return Row(
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        if (isCreator)
-                                          IconButton(
-                                            icon: Icon(Icons.edit, color: Colors.teal[700], size: 20),
-                                            onPressed: () => _modifyGroup(groupId),
-                                            tooltip: 'Edit Group',
+                                        Text(
+                                          'Group: ${group['name']}',
+                                          style: TextStyle(
+                                            color: Colors.teal[900],
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
                                           ),
-                                        if (isCreator)
-                                          IconButton(
-                                            icon: Icon(Icons.delete, color: Colors.red[700], size: 20),
-                                            onPressed: () => _deleteGroup(groupId),
-                                            tooltip: 'Delete Group',
+                                        ),
+                                        Text(
+                                          'ID: $groupId',
+                                          style: TextStyle(
+                                            color: Colors.teal[600],
+                                            fontSize: 14,
                                           ),
+                                        ),
                                       ],
-                                    );
-                                  },
-                                ),
-                              ],
+                                    ),
+                                  ),
+                                  Row(
+                                    children: [
+                                      IconButton(
+                                        icon: Icon(Icons.copy, color: Colors.teal[700], size: 28),
+                                        onPressed: () => _copyGroupId(groupId),
+                                        tooltip: 'Copy Group ID',
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.share, color: Colors.teal[700], size: 28),
+                                        onPressed: () => _shareGroupId(groupId),
+                                        tooltip: 'Share Group ID',
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.group, color: Colors.teal[700], size: 28),
+                                        onPressed: () => _showGroupMembers(groupId),
+                                        tooltip: 'View Members',
+                                      ),
+                                      FutureBuilder<DocumentSnapshot>(
+                                        future: FirebaseFirestore.instance
+                                            .collection('groups')
+                                            .doc(groupId)
+                                            .get(),
+                                        builder: (context, snapshot) {
+                                          if (!snapshot.hasData || !snapshot.data!.exists) {
+                                            return const SizedBox.shrink();
+                                          }
+                                          final isCreator = snapshot.data!['creatorId'] == currentUser?.uid;
+                                          return Row(
+                                            children: [
+                                              if (isCreator)
+                                                IconButton(
+                                                  icon: Icon(Icons.edit, color: Colors.teal[700], size: 28),
+                                                  onPressed: () => _modifyGroup(groupId),
+                                                  tooltip: 'Edit Group',
+                                                ),
+                                              if (isCreator)
+                                                IconButton(
+                                                  icon: Icon(Icons.delete, color: Colors.red[700], size: 28),
+                                                  onPressed: () => _deleteGroup(groupId),
+                                                  tooltip: 'Delete Group',
+                                                ),
+                                            ],
+                                          );
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
                           );
                         }).toList(),
