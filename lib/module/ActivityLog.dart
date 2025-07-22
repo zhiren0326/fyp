@@ -406,14 +406,20 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                   return Center(child: Text('Please log in.', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])));
                 }
 
-                // Filter jobs to exclude those created by the current user
+                // Filter jobs to exclude user-created jobs and jobs where acceptedApplicants >= requiredPeople
                 final jobs = snapshot.data!.docs.where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   final isOwner = data['postedBy'] == currentUser.uid;
                   if (isOwner) return false; // Exclude user-created jobs
                   final isAccepted = data['acceptedApplicants']?.contains(currentUser.uid) ?? false;
-                  final isFull = data['isFull'] ?? false;
+                  final acceptedCount = (data['acceptedApplicants'] as List?)?.length ?? 0;
+                  final requiredPeople = data['requiredPeople'] as int? ?? 1;
 
+                  // Exclude jobs where accepted applicants meet or exceed required people
+                  if (acceptedCount >= requiredPeople) return false;
+
+                  // Keep existing filtering logic for non-full, non-accepted jobs
+                  final isFull = data['isFull'] ?? false;
                   if (!isFull && !isAccepted) {
                     final jobPosition = data['jobPosition']?.toLowerCase() ?? '';
                     List<String> requiredSkills = [];
@@ -497,7 +503,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                 'Skill Required: ${data['requiredSkill'] is String ? (data['requiredSkill'] as String).split(',').join(', ') : (data['requiredSkill'] as List).join(', ')}',
                                 style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
                               ),
-                            Text('People Required: $requiredPeople', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                            Text('Applicants: ${applicants.length}/$requiredPeople', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
                           ],
                         ),
                         trailing: applicants.contains(currentUser.uid)

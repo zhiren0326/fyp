@@ -23,6 +23,21 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
 
   Future<void> _acceptApplicant(String applicantId) async {
     try {
+      // Fetch the job document to check acceptedApplicants and requiredPeople
+      final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(widget.jobId).get();
+      final data = jobDoc.data() as Map<String, dynamic>;
+      final acceptedApplicants = data['acceptedApplicants'] as List? ?? [];
+      final requiredPeople = data['requiredPeople'] as int? ?? 1;
+
+      // Check if accepting a new applicant would exceed requiredPeople
+      if (acceptedApplicants.length >= requiredPeople) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot accept more applicants: Job is already full')),
+        );
+        return;
+      }
+
+      // Proceed with accepting the applicant
       await FirebaseFirestore.instance.collection('jobs').doc(widget.jobId).update({
         'acceptedApplicants': FieldValue.arrayUnion([applicantId]),
       });
@@ -168,7 +183,16 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
             final applicants = data['applicants'] as List? ?? [];
             final requiredPeople = data['requiredPeople'] as int? ?? 1;
             final acceptedApplicants = data['acceptedApplicants'] as List? ?? [];
-            if (applicants.isEmpty) return const Center(child: Text('No applicants yet.', style: TextStyle(fontSize: 16)));
+            final isJobFull = acceptedApplicants.length >= requiredPeople;
+
+            if (applicants.isEmpty) {
+              return Center(
+                child: Text(
+                  isJobFull ? 'Job is full. No more applicants can be accepted.' : 'No applicants yet.',
+                  style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600]),
+                ),
+              );
+            }
 
             return ListView.builder(
               padding: const EdgeInsets.all(16),
@@ -206,7 +230,7 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
                         final name = profileData['name'] ?? 'Unknown User';
                         final phone = profileData['phone'] ?? 'Not provided';
                         final address = profileData['address'] ?? 'Not provided';
-                        final isAccepted = data['acceptedApplicants']?.contains(applicantId) ?? false;
+                        final isAccepted = acceptedApplicants.contains(applicantId);
                         final isRejected = data['rejectedApplicants']?.contains(applicantId) ?? false;
 
                         return Card(
@@ -237,12 +261,16 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
                                 if (!isAccepted && !isRejected)
                                   IconButton(
                                     icon: const Icon(Icons.check, color: Colors.green),
-                                    onPressed: () => _acceptApplicant(applicantId),
+                                    onPressed: isJobFull
+                                        ? null // Disable button if job is full
+                                        : () => _acceptApplicant(applicantId),
+                                    tooltip: isJobFull ? 'Job is full' : 'Accept applicant',
                                   ),
                                 if (!isAccepted && !isRejected)
                                   IconButton(
                                     icon: const Icon(Icons.close, color: Colors.red),
                                     onPressed: () => _rejectApplicant(applicantId),
+                                    tooltip: 'Reject applicant',
                                   ),
                               ],
                             ),

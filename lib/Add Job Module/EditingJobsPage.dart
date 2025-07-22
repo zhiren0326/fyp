@@ -1,3 +1,4 @@
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -151,7 +152,8 @@ class _EditingJobsPageState extends State<EditingJobsPage> {
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Posted: ${data['postedAt']?.toDate().toString().split('.')[0] ?? 'N/A'}', style: GoogleFonts.poppins()),
+                              Text('Posted: ${data['postedAt']?.toDate().toString().split('.')[0] ?? 'N/A'}',
+                                  style: GoogleFonts.poppins()),
                               Text('Applicants: ${applicants.length}', style: GoogleFonts.poppins()),
                               Text('Accepted: ${acceptedApplicants.length}/${requiredPeople}', style: GoogleFonts.poppins()),
                             ],
@@ -161,7 +163,8 @@ class _EditingJobsPageState extends State<EditingJobsPage> {
                             children: [
                               IconButton(icon: const Icon(Icons.edit, color: Colors.teal), onPressed: () => _editJob(jobId)),
                               const SizedBox(width: 8),
-                              IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _removeJob(jobId)),
+                              IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _removeJob(jobId)),
                               if (applicants.isNotEmpty)
                                 IconButton(
                                   icon: const Icon(Icons.people, color: Colors.blue),
@@ -183,12 +186,7 @@ class _EditingJobsPageState extends State<EditingJobsPage> {
                     .snapshots(),
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-
-                  final jobs = snapshot.data!.docs.where((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    final accepted = (data['acceptedApplicants'] as List?) ?? [];
-                    return !accepted.contains(currentUser.uid); // only show if not accepted
-                  }).toList();
+                  final jobs = snapshot.data!.docs;
                   if (jobs.isEmpty) return const Center(child: Text('No applied jobs.', style: TextStyle(fontSize: 16)));
                   return ListView.builder(
                     padding: const EdgeInsets.all(16),
@@ -197,8 +195,9 @@ class _EditingJobsPageState extends State<EditingJobsPage> {
                       final data = jobs[index].data() as Map<String, dynamic>;
                       final jobId = jobs[index].id;
                       final jobPosition = data['jobPosition'] ?? 'Untitled Job';
-                      final isAccepted = data['acceptedApplicants']?.contains(currentUser.uid) ?? false;
-                      final isRejected = data['rejectedApplicants']?.contains(currentUser.uid) ?? false;
+                      final isAccepted = (data['acceptedApplicants'] as List?)?.contains(currentUser.uid) ?? false;
+                      final isRejected = (data['rejectedApplicants'] as List?)?.contains(currentUser.uid) ?? false;
+                      final status = isAccepted ? 'Accepted' : isRejected ? 'Rejected' : 'Pending';
                       return Card(
                         margin: const EdgeInsets.symmetric(vertical: 6),
                         child: ListTile(
@@ -206,23 +205,21 @@ class _EditingJobsPageState extends State<EditingJobsPage> {
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Applied: ${data['postedAt']?.toDate().toString().split('.')[0] ?? 'N/A'}', style: GoogleFonts.poppins()),
+                              Text('Applied: ${data['postedAt']?.toDate().toString().split('.')[0] ?? 'N/A'}',
+                                  style: GoogleFonts.poppins()),
                               Text(
-                                'Status: ${isAccepted ? 'Accepted' : isRejected ? 'Rejected' : 'Pending'}',
+                                'Status: $status',
                                 style: GoogleFonts.poppins(
-                                  color: isAccepted
-                                      ? Colors.green
-                                      : isRejected
-                                      ? Colors.red
-                                      : Colors.orange,
+                                  color: isAccepted ? Colors.green : isRejected ? Colors.red : Colors.orange,
                                 ),
                               ),
                             ],
                           ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.visibility, color: Colors.teal),
-                            onPressed: () => _viewJobDetails(jobId),
+                          trailing: Icon(
+                            isAccepted ? Icons.check_circle : isRejected ? Icons.cancel : Icons.hourglass_empty,
+                            color: isAccepted ? Colors.green : isRejected ? Colors.red : Colors.orange,
                           ),
+                          onTap: () => _viewJobDetails(jobId),
                         ),
                       );
                     },

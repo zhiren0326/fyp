@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -7,6 +9,7 @@ import 'package:fyp/Splah/splash_screen.dart';
 import 'package:fyp/firebase_options.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest.dart' as tz;
 
 bool? seenOnboard;
 bool _isFirebaseInitialized = false;
@@ -62,7 +65,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Job Seaker App',
+      title: 'Job Seeker App',
       theme: ThemeData(
         textTheme: GoogleFonts.manropeTextTheme(
           Theme.of(context).textTheme,

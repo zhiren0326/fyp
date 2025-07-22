@@ -1,11 +1,11 @@
-import 'package:flutter/material.dart';
-import 'package:table_calendar/table_calendar.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:table_calendar/table_calendar.dart';
 
-// Custom dateOnly function
+import 'DailyPlannerPage.dart';
+
 DateTime dateOnly(DateTime dateTime) {
   return DateTime(dateTime.year, dateTime.month, dateTime.day);
 }
@@ -19,15 +19,9 @@ class CalendarPage extends StatefulWidget {
 
 class _CalendarPageState extends State<CalendarPage> {
   CalendarFormat _calendarFormat = CalendarFormat.month;
-  DateTime _focusedDay = DateTime.now().toLocal(); // Start with current date: 2025-07-23
+  DateTime _focusedDay = DateTime.now().toLocal();
   DateTime? _selectedDay;
   Map<DateTime, List<Task>> _tasks = {};
-  bool _isPomodoroRunning = false;
-  int _pomodoroMinutes = 25;
-  int _breakMinutes = 5;
-  Timer? _timer;
-  int _remainingSeconds = 0;
-  bool _isBreak = false;
 
   @override
   void initState() {
@@ -40,58 +34,73 @@ class _CalendarPageState extends State<CalendarPage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       try {
-        final now = dateOnly(DateTime.now().toLocal()); // Current date: 2025-07-23
-        final snapshot = await FirebaseFirestore.instance
+        final now = dateOnly(DateTime.now().toLocal());
+        final jobSnapshot = await FirebaseFirestore.instance
             .collection('jobs')
             .where('acceptedApplicants', arrayContains: user.uid)
             .where('startDate', isGreaterThanOrEqualTo: now.toIso8601String().split('T')[0])
+            .limit(50)
+            .get();
+
+        final taskSnapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('tasks')
+            .where('date', isGreaterThanOrEqualTo: now.toIso8601String().split('T')[0])
+            .limit(50)
             .get();
 
         setState(() {
           _tasks = {};
-          for (var doc in snapshot.docs) {
+          for (var doc in jobSnapshot.docs) {
             final data = doc.data();
-            final isShortTerm = data['isShortTerm'] == true;
             final startDate = data['startDate'] != null
                 ? dateOnly(DateTime.parse(data['startDate']).toLocal())
                 : now;
+            final isShortTerm = data['isShortTerm'] == true;
             final endDate = isShortTerm && data['endDate'] != null
                 ? dateOnly(DateTime.parse(data['endDate']).toLocal())
                 : startDate;
 
-            // Parse startTime and endTime
-            TimeOfDay startTime = _parseTimeOfDay(data['startTime'] ?? '12:00 AM');
-            TimeOfDay endTime = _parseTimeOfDay(data['endTime'] ?? '1:00 AM');
-
             final task = Task(
               title: data['jobPosition'] ?? 'Unnamed Job',
-              isTimeBlocked: false, // Default, can be toggled by user
-              startTime: startTime,
-              endTime: endTime,
+              isTimeBlocked: false,
+              startTime: _parseTimeOfDay(data['startTime'] ?? '12:00 AM'),
+              endTime: _parseTimeOfDay(data['endTime'] ?? '1:00 AM'),
+              jobId: doc.id,
             );
 
-            // For long-term jobs, only add to startDate
             if (!isShortTerm) {
               _tasks.putIfAbsent(startDate, () => []).add(task);
             } else {
-              // For short-term jobs, add to all dates from startDate to endDate
               DateTime currentDate = startDate;
               while (currentDate.isBefore(endDate) || currentDate.isAtSameMomentAs(endDate)) {
-                _tasks.putIfAbsent(currentDate, () => []).add(task);
+                if (!currentDate.isBefore(now)) {
+                  _tasks.putIfAbsent(currentDate, () => []).add(task);
+                }
                 currentDate = currentDate.add(const Duration(days: 1));
               }
             }
           }
-          print('Loaded accepted jobs for user ${user.uid}: $_tasks');
+
+          for (var doc in taskSnapshot.docs) {
+            final data = doc.data();
+            final date = dateOnly(DateTime.parse(data['date']));
+            final tasksData = data['tasks'] as List<dynamic>? ?? [];
+            for (var taskData in tasksData) {
+              final task = Task.fromMap(taskData);
+              _tasks.putIfAbsent(date, () => []).add(task);
+            }
+          }
+
+          print('Loaded ${jobSnapshot.docs.length} jobs and ${taskSnapshot.docs.length} tasks for user ${user.uid}');
         });
       } catch (e) {
-        print('Error loading jobs: $e');
+        print('Error loading tasks: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load jobs: $e')),
+          SnackBar(content: Text('Failed to load tasks: $e')),
         );
       }
-    } else {
-      print('No user logged in');
     }
   }
 
@@ -121,60 +130,9 @@ class _CalendarPageState extends State<CalendarPage> {
 
       return TimeOfDay(hour: hour, minute: minute);
     } catch (e) {
-      print('Error parsing time: $e');
-      return TimeOfDay(hour: 0, minute: 0); // Fallback
+      print('Error parsing time: $timeStr, $e');
+      return TimeOfDay(hour: 0, minute: 0);
     }
-  }
-
-  void _startPomodoro() {
-    if (!_isPomodoroRunning) {
-      setState(() {
-        _isPomodoroRunning = true;
-        _remainingSeconds = _pomodoroMinutes * 60;
-        _isBreak = false;
-      });
-      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        setState(() {
-          if (_remainingSeconds > 0) {
-            _remainingSeconds--;
-          } else {
-            _isBreak = !_isBreak;
-            _remainingSeconds = _isBreak ? _breakMinutes * 60 : _pomodoroMinutes * 60;
-            if (_remainingSeconds == 0) {
-              _stopPomodoro();
-            }
-          }
-        });
-      });
-    }
-  }
-
-  void _stopPomodoro() {
-    _timer?.cancel();
-    setState(() {
-      _isPomodoroRunning = false;
-      _remainingSeconds = 0;
-    });
-  }
-
-  Future<void> _saveTask(DateTime date, Task task) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .collection('tasks')
-          .doc(date.toIso8601String().split('T')[0])
-          .set({
-        'tasks': FieldValue.arrayUnion([task.toMap()]),
-      }, SetOptions(merge: true));
-    }
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
   }
 
   @override
@@ -190,127 +148,90 @@ class _CalendarPageState extends State<CalendarPage> {
       ),
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: Column(
-          children: [
-            TableCalendar(
-              firstDay: now, // Restrict to today onward: 2025-07-23
-              lastDay: DateTime.utc(2030, 12, 31),
-              focusedDay: _focusedDay,
-              calendarFormat: _calendarFormat,
-              selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-              onDaySelected: (selectedDay, focusedDay) {
-                setState(() {
-                  _selectedDay = selectedDay;
-                  _focusedDay = focusedDay;
-                });
-              },
-              onFormatChanged: (format) {
-                if (_calendarFormat != format) {
+        body: SafeArea(
+          child: Column(
+            children: [
+              TableCalendar(
+                firstDay: now,
+                lastDay: DateTime.utc(2030, 12, 31),
+                focusedDay: _focusedDay,
+                calendarFormat: _calendarFormat,
+                selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+                onDaySelected: (selectedDay, focusedDay) {
                   setState(() {
-                    _calendarFormat = format;
+                    _selectedDay = selectedDay;
+                    _focusedDay = focusedDay;
                   });
-                }
-              },
-              onPageChanged: (focusedDay) {
-                _focusedDay = focusedDay;
-                _loadTasks(); // Reload tasks when page changes
-              },
-              eventLoader: (day) {
-                final date = dateOnly(day);
-                return _tasks[date] ?? [];
-              },
-              calendarStyle: CalendarStyle(
-                todayDecoration: BoxDecoration(
-                  color: Colors.teal,
-                  shape: BoxShape.circle,
-                ),
-                selectedDecoration: BoxDecoration(
-                  color: Colors.teal[700],
-                  shape: BoxShape.circle,
-                ),
-                todayTextStyle: GoogleFonts.poppins(color: Colors.white),
-                selectedTextStyle: GoogleFonts.poppins(color: Colors.white),
-                defaultTextStyle: GoogleFonts.poppins(color: Colors.black87),
-                markersAlignment: Alignment.bottomRight,
-                markerDecoration: BoxDecoration(
-                  color: Colors.redAccent,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              headerStyle: HeaderStyle(
-                formatButtonDecoration: BoxDecoration(
-                  color: Colors.teal,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                formatButtonTextStyle: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                ),
-                titleTextStyle: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.teal,
-                ),
-              ),
-            ),
-            if (_isPomodoroRunning)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
-                child: Text(
-                  '${(_remainingSeconds / 60).floor()}:${(_remainingSeconds % 60).toString().padLeft(2, '0')} ${_isBreak ? 'Break' : 'Work'}',
-                  style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-            Expanded(
-              child: (_tasks[dateOnly(_selectedDay!)]?.isEmpty ?? true)
-                  ? Center(
-                child: Text(
-                  'No accepted jobs for this day',
-                  style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey),
-                ),
-              )
-                  : ListView.builder(
-                itemCount: _tasks[dateOnly(_selectedDay!)]?.length ?? 0,
-                itemBuilder: (context, index) {
-                  final task = _tasks[dateOnly(_selectedDay!)]![index];
-                  return Card(
-                    margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                    child: ListTile(
-                      title: Text(task.title, style: GoogleFonts.poppins(fontSize: 16)),
-                      subtitle: Text(
-                        '${task.startTime.format(context)} - ${task.endTime.format(context)} ${task.isTimeBlocked ? '(Deep Work)' : ''}',
-                        style: GoogleFonts.poppins(fontSize: 14),
-                      ),
-                      trailing: Checkbox(
-                        value: task.isTimeBlocked,
-                        onChanged: (value) {
-                          setState(() {
-                            task.isTimeBlocked = value ?? false;
-                            _saveTask(dateOnly(_selectedDay!), task);
-                          });
-                        },
-                      ),
-                    ),
-                  );
                 },
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: ElevatedButton(
-                onPressed: _isPomodoroRunning ? _stopPomodoro : _startPomodoro,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onFormatChanged: (format) {
+                  if (_calendarFormat != format) {
+                    setState(() {
+                      _calendarFormat = format;
+                    });
+                  }
+                },
+                onPageChanged: (focusedDay) {
+                  _focusedDay = focusedDay;
+                  _loadTasks();
+                },
+                eventLoader: (day) {
+                  final date = dateOnly(day);
+                  return _tasks[date] ?? [];
+                },
+                calendarStyle: CalendarStyle(
+                  todayDecoration: BoxDecoration(color: Colors.teal, shape: BoxShape.circle),
+                  selectedDecoration: BoxDecoration(color: Colors.teal[700], shape: BoxShape.circle),
+                  todayTextStyle: GoogleFonts.poppins(color: Colors.white),
+                  selectedTextStyle: GoogleFonts.poppins(color: Colors.white),
+                  defaultTextStyle: GoogleFonts.poppins(color: Colors.black87),
+                  markersAlignment: Alignment.bottomRight,
+                  markerDecoration: BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
                 ),
-                child: Text(
-                  _isPomodoroRunning ? 'Stop Pomodoro' : 'Start Pomodoro',
-                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 16),
+                headerStyle: HeaderStyle(
+                  formatButtonDecoration: BoxDecoration(
+                    color: Colors.teal,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  formatButtonTextStyle: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600),
+                  titleTextStyle: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.teal),
                 ),
               ),
-            ),
-          ],
+              Expanded(
+                child: (_tasks[dateOnly(_selectedDay!)]?.isEmpty ?? true)
+                    ? Center(
+                  child: Text(
+                    'No tasks for this day',
+                    style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey),
+                  ),
+                )
+                    : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _tasks[dateOnly(_selectedDay!)]!.length,
+                  itemBuilder: (context, index) {
+                    final task = _tasks[dateOnly(_selectedDay!)]![index];
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      child: ListTile(
+                        title: Text(
+                          task.title,
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: task.isTimeBlocked
+                            ? Text(
+                          '${task.startTime.format(context)} - ${task.endTime.format(context)}',
+                          style: GoogleFonts.poppins(),
+                        )
+                            : Text(
+                          'No time block assigned',
+                          style: GoogleFonts.poppins(color: Colors.grey),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -320,21 +241,34 @@ class _CalendarPageState extends State<CalendarPage> {
 class Task {
   final String title;
   bool isTimeBlocked;
-  final TimeOfDay startTime;
+  TimeOfDay startTime;
   TimeOfDay endTime;
+  final String? jobId;
 
   Task({
     required this.title,
     this.isTimeBlocked = false,
     required this.startTime,
     required this.endTime,
+    this.jobId,
   });
+
+  Task copyWith({TimeOfDay? startTime, TimeOfDay? endTime, bool? isTimeBlocked}) {
+    return Task(
+      title: title,
+      isTimeBlocked: isTimeBlocked ?? this.isTimeBlocked,
+      startTime: startTime ?? this.startTime,
+      endTime: endTime ?? this.endTime,
+      jobId: jobId,
+    );
+  }
 
   Map<String, dynamic> toMap() => {
     'title': title,
     'isTimeBlocked': isTimeBlocked,
     'startTime': '${startTime.hour}:${startTime.minute}',
     'endTime': '${endTime.hour}:${endTime.minute}',
+    'jobId': jobId,
   };
 
   factory Task.fromMap(Map<String, dynamic> map) {
@@ -353,6 +287,7 @@ class Task {
       isTimeBlocked: map['isTimeBlocked'] as bool? ?? false,
       startTime: startTime,
       endTime: endTime,
+      jobId: map['jobId'] as String?,
     );
   }
 }
