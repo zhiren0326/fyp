@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:fyp/module/ChatMessage.dart';
 import 'package:intl/intl.dart';
 import 'dart:math';
 import 'package:flutter/services.dart';
@@ -15,22 +16,20 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _messageController = TextEditingController();
-  String? _selectedCustomId;
-  String? _selectedUserName;
-  List<DocumentSnapshot> _searchResults = [];
   String? _currentUserCustomId;
+  List<Map<String, dynamic>> _chatList = [];
+  List<DocumentSnapshot> _searchResults = [];
 
   @override
   void initState() {
     super.initState();
     _initializeUserCustomId();
+    _loadChatList();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _messageController.dispose();
     super.dispose();
   }
 
@@ -48,44 +47,128 @@ class _ChatScreenState extends State<ChatScreen> {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
 
-    final userDoc = await FirebaseFirestore.instance
-        .collection('custom_ids')
-        .doc(currentUser.uid)
-        .get();
-
-    if (!userDoc.exists) {
-      String customId;
-      bool isUnique;
-      do {
-        customId = _generateCustomId();
-        isUnique = (await FirebaseFirestore.instance
-            .collection('custom_ids')
-            .where('customId', isEqualTo: customId)
-            .get())
-            .docs
-            .isEmpty;
-      } while (!isUnique);
-
-      await FirebaseFirestore.instance
+    try {
+      final userDoc = await FirebaseFirestore.instance
           .collection('custom_ids')
           .doc(currentUser.uid)
-          .set({
-        'customId': customId,
-        'userId': currentUser.uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+          .get();
 
-      setState(() {
-        _currentUserCustomId = customId;
-      });
-    } else {
-      setState(() {
-        _currentUserCustomId = userDoc['customId'];
-      });
+      if (!userDoc.exists) {
+        String customId;
+        bool isUnique;
+        do {
+          customId = _generateCustomId();
+          isUnique = (await FirebaseFirestore.instance
+              .collection('custom_ids')
+              .where('customId', isEqualTo: customId)
+              .get())
+              .docs
+              .isEmpty;
+        } while (!isUnique);
+
+        await FirebaseFirestore.instance
+            .collection('custom_ids')
+            .doc(currentUser.uid)
+            .set({
+          'customId': customId,
+          'userId': currentUser.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+        setState(() {
+          _currentUserCustomId = customId;
+        });
+      } else {
+        setState(() {
+          _currentUserCustomId = userDoc['customId'];
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to initialize user ID: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
   }
 
-  // Search users by custom ID only
+  // Load chat list from Firestore
+  Future<void> _loadChatList() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null || _currentUserCustomId == null) return;
+
+    try {
+      final chatDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('chats')
+          .doc('chat_list')
+          .get();
+
+      if (chatDoc.exists) {
+        setState(() {
+          _chatList = List<Map<String, dynamic>>.from(chatDoc['users'] ?? []);
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to load chat list: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  // Add or update chat in Firestore
+  Future<void> _addChat(String customId, String name, String photoURL) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null || _currentUserCustomId == null) return;
+
+    try {
+      final chatDocRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('chats')
+          .doc('chat_list');
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final doc = await transaction.get(chatDocRef);
+        List<Map<String, dynamic>> updatedChatList = List<Map<String, dynamic>>.from(doc.data()?['users'] ?? []);
+        final chatIndex = updatedChatList.indexWhere((chat) => chat['customId'] == customId);
+
+        if (chatIndex == -1) {
+          updatedChatList.add({'customId': customId, 'name': name, 'photoURL': photoURL});
+        } else {
+          updatedChatList[chatIndex] = {'customId': customId, 'name': name, 'photoURL': photoURL};
+        }
+
+        transaction.set(chatDocRef, {'users': updatedChatList}, SetOptions(merge: true));
+      });
+
+      setState(() {
+        final chatIndex = _chatList.indexWhere((chat) => chat['customId'] == customId);
+        if (chatIndex == -1) {
+          _chatList.add({'customId': customId, 'name': name, 'photoURL': photoURL});
+        } else {
+          _chatList[chatIndex] = {'customId': customId, 'name': name, 'photoURL': photoURL};
+        }
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to add chat: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  // Search users by custom ID and fetch profile details
   Future<void> _searchUsers(String query) async {
     if (query.isEmpty) {
       setState(() {
@@ -94,55 +177,37 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final idResult = await FirebaseFirestore.instance
-        .collection('custom_ids')
-        .where('customId', isEqualTo: query.toUpperCase())
-        .get();
-
-    final userDocs = <String, DocumentSnapshot>{};
-    for (var customIdDoc in idResult.docs) {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(customIdDoc['userId'])
+    try {
+      final idResult = await FirebaseFirestore.instance
+          .collection('custom_ids')
+          .where('customId', isEqualTo: query.toUpperCase())
           .get();
-      if (userDoc.exists) {
-        userDocs[userDoc.id] = userDoc;
+
+      final userDocs = <String, DocumentSnapshot>{};
+      for (var customIdDoc in idResult.docs) {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(customIdDoc['userId'])
+            .collection('profiledetails')
+            .doc('profile')
+            .get();
+        if (userDoc.exists) {
+          userDocs[userDoc.reference.parent.parent!.id] = userDoc;
+        }
       }
+
+      setState(() {
+        _searchResults = userDocs.values.toList();
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Search failed: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
-
-    setState(() {
-      _searchResults = userDocs.values.toList();
-    });
-  }
-
-  // Create or get chat room ID for one-on-one chat
-  String _getChatRoomId(String customId1, String customId2) {
-    return customId1.compareTo(customId2) < 0
-        ? '${customId1}_$customId2'
-        : '${customId2}_$customId1';
-  }
-
-  // Send message
-  Future<void> _sendMessage() async {
-    if (_messageController.text.isEmpty || _selectedCustomId == null) return;
-
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null || _currentUserCustomId == null) return;
-
-    final collectionPath =
-        'chat_rooms/${_getChatRoomId(_currentUserCustomId!, _selectedCustomId!)}/messages';
-
-    await FirebaseFirestore.instance.collection(collectionPath).add({
-      'text': _messageController.text,
-      'senderCustomId': _currentUserCustomId,
-      'senderName': (await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .get())['profiledetails']['profile']['name'] ?? 'Unknown',
-      'timestamp': FieldValue.serverTimestamp(),
-    });
-
-    _messageController.clear();
   }
 
   // Copy custom ID to clipboard
@@ -187,338 +252,216 @@ class _ChatScreenState extends State<ChatScreen> {
             colors: [const Color(0xFFB2DFDB), Colors.white],
           ),
         ),
-        child: Column(
-          children: [
-            // Custom header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16.0, 40.0, 16.0, 16.0),
-              child: Column(
-                children: [
-                  Text(
-                    _selectedUserName ?? 'Chat',
-                    style: const TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                      letterSpacing: 1.5,
+        child: SafeArea(
+          child: Column(
+            children: [
+              // Custom header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16.0, 20.0, 16.0, 16.0),
+                child: Column(
+                  children: [
+                    const Text(
+                      'Chat',
+                      style: TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                        letterSpacing: 1.5,
+                      ),
                     ),
+                    const SizedBox(height: 16),
+                    if (_currentUserCustomId != null)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Your ID: $_currentUserCustomId',
+                            style: TextStyle(
+                              color: Colors.teal[900],
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.8,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          IconButton(
+                            icon: Icon(Icons.copy, color: Colors.teal[700], size: 28),
+                            onPressed: _copyCustomId,
+                            tooltip: 'Copy ID',
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.share, color: Colors.teal[700], size: 28),
+                            onPressed: _shareCustomId,
+                            tooltip: 'Share ID',
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+              // Search bar for custom IDs
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Enter user ID (e.g., ABC123)',
+                    hintStyle: TextStyle(color: Colors.teal[500], fontSize: 18),
+                    prefixIcon: Icon(Icons.search, color: Colors.teal[800], size: 30),
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.9),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide(color: Colors.teal[400]!, width: 2),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide(color: Colors.teal[800]!, width: 3),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
                   ),
-                  const SizedBox(height: 16),
-                  if (_currentUserCustomId != null)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          'Your ID: $_currentUserCustomId',
+                  style: TextStyle(fontSize: 18, color: Colors.teal[900]),
+                  onChanged: (query) {
+                    _searchUsers(query);
+                  },
+                ),
+              ),
+              // Search results for users
+              if (_searchResults.isNotEmpty)
+                Container(
+                  height: 140,
+                  padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                  child: ListView.builder(
+                    itemCount: _searchResults.length,
+                    itemBuilder: (context, index) {
+                      final user = _searchResults[index];
+                      final userName = user['name'] ?? 'Unknown';
+                      final userPhotoURL = user['photoURL'] ?? 'assets/default_avatar.png';
+                      final userGmail = user['email'] ?? '';
+                      final userContact = user['phone'] ?? '';
+                      return FutureBuilder<DocumentSnapshot>(
+                        future: FirebaseFirestore.instance.collection('custom_ids').doc(user.reference.parent.parent!.id).get(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const SizedBox.shrink();
+                          final customId = snapshot.data?['customId'] ?? 'Unknown';
+                          return Card(
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            color: Colors.white.withOpacity(0.95),
+                            margin: const EdgeInsets.symmetric(vertical: 6),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundImage: userPhotoURL.startsWith('assets/')
+                                    ? AssetImage(userPhotoURL) as ImageProvider
+                                    : NetworkImage(userPhotoURL),
+                                radius: 20,
+                                onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
+                              ),
+                              title: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    userName,
+                                    style: TextStyle(
+                                      color: Colors.teal[900],
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Email: $userGmail\nPhone: $userContact',
+                                    style: TextStyle(
+                                      color: Colors.teal[600],
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              subtitle: Text(
+                                'ID: $customId',
+                                style: TextStyle(
+                                  color: Colors.teal[800],
+                                  fontSize: 12,
+                                ),
+                              ),
+                              onTap: () {
+                                _addChat(customId, userName, userPhotoURL);
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ChatMessage(
+                                      currentUserCustomId: _currentUserCustomId!,
+                                      selectedCustomId: customId,
+                                      selectedUserName: userName,
+                                      selectedUserPhotoURL: userPhotoURL,
+                                    ),
+                                  ),
+                                ).then((_) => _loadChatList()); // Reload chat list on return
+                              },
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              // Persistent chat list
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _chatList.length,
+                  itemBuilder: (context, index) {
+                    final chat = _chatList[index];
+                    return Card(
+                      elevation: 4,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      color: Colors.white.withOpacity(0.95),
+                      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundImage: chat['photoURL'].startsWith('assets/')
+                              ? AssetImage(chat['photoURL']) as ImageProvider
+                              : NetworkImage(chat['photoURL']),
+                          radius: 20,
+                          onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
+                        ),
+                        title: Text(
+                          chat['name'],
                           style: TextStyle(
                             color: Colors.teal[900],
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
-                            letterSpacing: 0.8,
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        IconButton(
-                          icon: Icon(Icons.copy, color: Colors.teal[700], size: 28),
-                          onPressed: _copyCustomId,
-                          tooltip: 'Copy ID',
-                        ),
-                        IconButton(
-                          icon: Icon(Icons.share, color: Colors.teal[700], size: 28),
-                          onPressed: _shareCustomId,
-                          tooltip: 'Share ID',
-                        ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-            // Search bar for custom IDs
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: 'Enter user ID (e.g., ABC123)',
-                  hintStyle: TextStyle(color: Colors.teal[500], fontSize: 18),
-                  prefixIcon: Icon(Icons.search, color: Colors.teal[800], size: 30),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.9),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    borderSide: BorderSide.none,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    borderSide: BorderSide(color: Colors.teal[400]!, width: 2),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    borderSide: BorderSide(color: Colors.teal[800]!, width: 3),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                ),
-                style: TextStyle(fontSize: 18, color: Colors.teal[900]),
-                onChanged: (query) {
-                  _searchUsers(query);
-                },
-              ),
-            ),
-            // Search results for users
-            if (_searchResults.isNotEmpty)
-              Container(
-                height: 140,
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: ListView.builder(
-                  itemCount: _searchResults.length,
-                  itemBuilder: (context, index) {
-                    final user = _searchResults[index];
-                    final userName = user['profiledetails']['profile']['name'] ?? 'Unknown';
-                    return FutureBuilder<DocumentSnapshot>(
-                      future: FirebaseFirestore.instance.collection('custom_ids').doc(user.id).get(),
-                      builder: (context, snapshot) {
-                        if (!snapshot.hasData) return const SizedBox.shrink();
-                        final customId = snapshot.data?['customId'] ?? 'Unknown';
-                        return Card(
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          color: Colors.white.withOpacity(0.95),
-                          margin: const EdgeInsets.symmetric(vertical: 6),
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                            title: Text(
-                              '$userName (ID: $customId)',
-                              style: TextStyle(
-                                color: Colors.teal[900],
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ChatMessage(
+                                currentUserCustomId: _currentUserCustomId!,
+                                selectedCustomId: chat['customId'],
+                                selectedUserName: chat['name'],
+                                selectedUserPhotoURL: chat['photoURL'],
                               ),
                             ),
-                            onTap: () {
-                              setState(() {
-                                _selectedCustomId = customId;
-                                _selectedUserName = userName;
-                                _searchResults = [];
-                                _searchController.clear();
-                              });
-                            },
-                          ),
-                        );
-                      },
+                          ).then((_) => _loadChatList()); // Reload chat list on return
+                        },
+                      ),
                     );
                   },
                 ),
               ),
-            // Chat messages
-            Expanded(
-              child: _selectedCustomId != null
-                  ? StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection(
-                    'chat_rooms/${_getChatRoomId(_currentUserCustomId!, _selectedCustomId!)}/messages')
-                    .orderBy('timestamp', descending: true)
-                    .snapshots(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.teal),
-                      ),
-                    );
-                  }
-                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                    return Center(
-                      child: Text(
-                        'No messages yet',
-                        style: TextStyle(
-                          color: Colors.teal[800],
-                          fontSize: 18,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    );
-                  }
-
-                  final messages = snapshot.data!.docs;
-
-                  return ListView.builder(
-                    reverse: true,
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final message = messages[index];
-                      final isMe = message['senderCustomId'] == _currentUserCustomId;
-                      return ListTile(
-                        title: BobbleHeadAnimation(
-                          isMe: isMe,
-                          child: Container(
-                            padding: const EdgeInsets.all(16),
-                            margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
-                            decoration: BoxDecoration(
-                              color: isMe
-                                  ? Colors.teal[100]!.withOpacity(0.9)
-                                  : Colors.white.withOpacity(0.9),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black12,
-                                  blurRadius: 4,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              crossAxisAlignment:
-                              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  message['senderName'] ?? 'Unknown',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.teal[800],
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  message['text'],
-                                  style: TextStyle(
-                                    color: Colors.teal[900],
-                                    fontSize: 18,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 2, left: 20, right: 20),
-                          child: Text(
-                            message['timestamp'] != null
-                                ? DateFormat('hh:mm a')
-                                .format((message['timestamp'] as Timestamp).toDate())
-                                : '',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.teal[600],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-              )
-                  : Center(
-                child: Text(
-                  'Enter a user ID to start chatting',
-                  style: TextStyle(
-                    color: Colors.teal[800],
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ),
-            // Message input
-            if (_selectedCustomId != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _messageController,
-                        decoration: InputDecoration(
-                          hintText: 'Type a message...',
-                          hintStyle: TextStyle(color: Colors.teal[500], fontSize: 18),
-                          filled: true,
-                          fillColor: Colors.white.withOpacity(0.9),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            borderSide: BorderSide.none,
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            borderSide: BorderSide(color: Colors.teal[400]!, width: 2),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            borderSide: BorderSide(color: Colors.teal[800]!, width: 3),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                        ),
-                        style: TextStyle(fontSize: 18, color: Colors.teal[900]),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: _sendMessage,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal[800],
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        padding: const EdgeInsets.all(16),
-                        elevation: 4,
-                      ),
-                      child: Icon(Icons.send, color: Colors.white, size: 28),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
-    );
-  }
-}
-
-// Bobble head animation widget
-class BobbleHeadAnimation extends StatefulWidget {
-  final bool isMe;
-  final Widget child;
-
-  const BobbleHeadAnimation({Key? key, required this.isMe, required this.child}) : super(key: key);
-
-  @override
-  BobbleHeadAnimationState createState() => BobbleHeadAnimationState();
-}
-
-class BobbleHeadAnimationState extends State<BobbleHeadAnimation> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 500),
-      vsync: this,
-    )..forward();
-
-    _animation = Tween<double>(begin: 0, end: 10).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.elasticOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _animation,
-      builder: (context, child) {
-        return Transform.translate(
-          offset: Offset(widget.isMe ? -_animation.value : _animation.value, 0),
-          child: widget.child,
-        );
-      },
     );
   }
 }
