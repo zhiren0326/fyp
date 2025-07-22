@@ -19,10 +19,10 @@ String _searchQuery = '';
 
 class _ActivityLogScreenState extends State<ActivityLogScreen> {
   static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo'; // Hardcoded Gemini API key
-  bool _isSkillsFilterEnabled = false; // Tracks smart job suggestions filter
-  bool _isAIPoweredFilterEnabled = false; // Tracks AI-powered suggestions filter
-  String _userSkills = ''; // Stores user's skills as a comma-separated string
-  List<String> _relatedSkills = []; // Stores AI-generated related skills
+  bool _isSkillsFilterEnabled = false;
+  bool _isAIPoweredFilterEnabled = false;
+  String _userSkills = '';
+  List<String> _relatedSkills = [];
 
   @override
   void initState() {
@@ -30,19 +30,15 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Tap the + button to create a new task',
-            style: GoogleFonts.poppins(),
-          ),
+          content: Text('Tap the + button to create a new task', style: GoogleFonts.poppins()),
           duration: const Duration(seconds: 2),
           backgroundColor: Colors.teal,
         ),
       );
-      _fetchUserSkills(); // Fetch user skills on init
+      _fetchUserSkills();
     });
   }
 
-  // Fetch user skills from Firestore at users/{uid}/skills/user_skills
   Future<void> _fetchUserSkills() async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
@@ -60,49 +56,34 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         if (data['skills'] != null) {
           setState(() {
             _userSkills = (data['skills'] as List)
-                .map((item) => (item['skill'] ?? 'Unknown Skill').toString().trim())
+                .map((item) => (item['skill'] ?? 'Unknown Skill').trim())
                 .join(', ');
           });
-          print('User skills: $_userSkills'); // Debug log
-          // Fetch related skills based on user skills
-          if (_userSkills.isNotEmpty) {
-            _fetchRelatedSkills();
-          }
+          print('User skills: $_userSkills');
+          if (_userSkills.isNotEmpty) _fetchRelatedSkills();
         }
       }
     } catch (e) {
-      print('Error fetching skills: $e'); // Debug log
+      print('Error fetching skills: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Error fetching skills: $e',
-            style: GoogleFonts.poppins(),
-          ),
-          backgroundColor: Colors.redAccent,
-        ),
+        SnackBar(content: Text('Error fetching skills: $e', style: GoogleFonts.poppins()), backgroundColor: Colors.redAccent),
       );
     }
   }
 
-  // Fetch AI-generated related skills using Gemini API
   Future<void> _fetchRelatedSkills() async {
     if (_geminiApiKey.isEmpty) {
-      setState(() {
-        _relatedSkills = _userSkills.toLowerCase().contains('flutter')
-            ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] // Fallback for Flutter users
-            : [];
-      });
-      print('API key not configured'); // Debug log
+      setState(() => _relatedSkills = _userSkills.toLowerCase().contains('flutter')
+          ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python']
+          : []);
+      print('API key not configured');
       return;
     }
 
-    // Check if user has Flutter skill for coding-specific prompt
     final isFlutterUser = _userSkills.toLowerCase().contains('flutter');
     final prompt = isFlutterUser
-        ? 'For a user with skills: $_userSkills, provide related coding skills (e.g., Dart, Firebase, Android, Java, Kotlin, Python) as a comma-separated list. '
-        'Return JSON with key "relatedSkills".'
-        : 'For a user with skills: $_userSkills, provide related skills in the same category as a comma-separated list. '
-        'Return JSON with key "relatedSkills".';
+        ? 'For skills: $_userSkills, suggest related coding skills (e.g., Dart, Firebase) as a comma-separated list. Return JSON with "relatedSkills".'
+        : 'For skills: $_userSkills, suggest related skills as a comma-separated list. Return JSON with "relatedSkills".';
 
     const maxRetries = 3;
     for (int attempt = 1; attempt <= maxRetries; attempt++) {
@@ -110,116 +91,91 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         final response = await http.post(
           Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$_geminiApiKey'),
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'contents': [
-              {
-                'parts': [
-                  {'text': prompt}
-                ]
-              }
-            ]
-          }),
+          body: jsonEncode({'contents': [{'parts': [{'text': prompt}]}]}),
         );
 
-        print('Attempt $attempt - API response status: ${response.statusCode}'); // Debug log
-        print('Attempt $attempt - API response body: ${response.body}'); // Debug log
-        print('Using Flutter-specific prompt: $isFlutterUser'); // Debug log
-
+        print('Attempt $attempt - Status: ${response.statusCode}, Body: ${response.body}, FlutterUser: $isFlutterUser');
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
           final content = data['candidates']?[0]['content']['parts'][0]['text'] as String?;
           if (content == null) {
-            setState(() {
-              _relatedSkills = isFlutterUser
-                  ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] // Fallback for Flutter users
-                  : [];
-            });
-            print('Invalid API response: content is null'); // Debug log
+            setState(() => _relatedSkills = isFlutterUser
+                ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python']
+                : []);
+            print('Invalid API response: content null');
             return;
           }
           try {
             final parsed = jsonDecode(content);
-            setState(() {
-              _relatedSkills = (parsed['relatedSkills'] as String?)?.split(',').map((s) => s.trim()).toList() ??
-                  (isFlutterUser ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] : []);
-            });
-            print('Related skills: $_relatedSkills'); // Debug log
-            return; // Success, exit retry loop
+            setState(() => _relatedSkills = (parsed['relatedSkills'] as String?)?.split(',').map((s) => s.trim()).toList() ??
+                (isFlutterUser ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] : []));
+            print('Related skills: $_relatedSkills');
+            return;
           } catch (e) {
-            setState(() {
-              _relatedSkills = isFlutterUser
-                  ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] // Fallback for Flutter users
-                  : [];
-            });
-            print('Error parsing API response: $e'); // Debug log
+            setState(() => _relatedSkills = isFlutterUser
+                ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python']
+                : []);
+            print('Parse error: $e');
             return;
           }
         } else if (response.statusCode == 401) {
-          setState(() {
-            _relatedSkills = isFlutterUser
-                ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] // Fallback for Flutter users
-                : [];
-          });
-          print('HTTP 401: Invalid API key'); // Debug log
+          setState(() => _relatedSkills = isFlutterUser
+              ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python']
+              : []);
+          print('HTTP 401: Invalid API key');
           return;
         } else if (response.statusCode == 429) {
-          print('HTTP 429: Rate limit exceeded, retrying...'); // Debug log
+          print('HTTP 429: Rate limit, retrying...');
           if (attempt < maxRetries) {
-            await Future.delayed(Duration(seconds: attempt * 2)); // Exponential backoff
+            await Future.delayed(Duration(seconds: attempt * 2));
             continue;
           }
-          setState(() {
-            _relatedSkills = isFlutterUser
-                ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] // Fallback for Flutter users
-                : [];
-          });
-          print('HTTP 429: Rate limit exceeded after $maxRetries attempts'); // Debug log
+          setState(() => _relatedSkills = isFlutterUser
+              ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python']
+              : []);
+          print('Rate limit exceeded after $maxRetries attempts');
           return;
         } else {
-          setState(() {
-            _relatedSkills = isFlutterUser
-                ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] // Fallback for Flutter users
-                : [];
-          });
-          print('HTTP error: ${response.statusCode}'); // Debug log
+          setState(() => _relatedSkills = isFlutterUser
+              ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python']
+              : []);
+          print('HTTP error: ${response.statusCode}');
           return;
         }
       } catch (e) {
-        print('Attempt $attempt - Error fetching related skills: $e'); // Debug log
+        print('Attempt $attempt - Error: $e');
         if (attempt < maxRetries) {
-          await Future.delayed(Duration(seconds: attempt * 2)); // Exponential backoff
+          await Future.delayed(Duration(seconds: attempt * 2));
           continue;
         }
-        setState(() {
-          _relatedSkills = isFlutterUser
-              ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python'] // Fallback for Flutter users
-              : [];
-        });
-        print('Error fetching related skills after $maxRetries attempts: $e'); // Debug log
+        setState(() => _relatedSkills = isFlutterUser
+            ? ['Dart', 'Firebase', 'Android', 'Java', 'Kotlin', 'Python']
+            : []);
+        print('Error after $maxRetries attempts: $e');
         return;
       }
     }
   }
 
   void _editJob(String jobId, Map<String, dynamic> data) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => AddJobPage(jobId: jobId, initialData: data),
-      ),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (context) => AddJobPage(jobId: jobId, initialData: data)));
   }
 
   @override
   Widget build(BuildContext context) {
     final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return const Center(child: Text('Please log in.'));
+
+    final today = DateTime.now();
+    final startOfDay = DateTime(today.year, today.month, today.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
 
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFB2DFDB), Colors.white], // Teal to white gradient
+          colors: [Color(0xFFB2DFDB), Colors.white],
         ),
       ),
       child: Scaffold(
@@ -229,23 +185,15 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Center(
-                child: Text(
-                  'Activity',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
-                  ),
-                ),
+                child: Text('Activity', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black)),
               ),
             ),
-            // User Greeting
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: StreamBuilder<DocumentSnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('users')
-                    .doc(currentUser!.uid)
+                    .doc(currentUser.uid)
                     .collection('profiledetails')
                     .doc('profile')
                     .snapshots(),
@@ -253,110 +201,187 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                   String displayName = "User";
                   if (snapshot.hasData && snapshot.data!.exists) {
                     final data = snapshot.data!.data() as Map<String, dynamic>;
-                    if (data['name'] != null && data['name'].toString().isNotEmpty) {
-                      displayName = data['name'];
-                    }
+                    if (data['name'] != null && data['name'].isNotEmpty) displayName = data['name'];
                   }
-                  return Text(
-                    'Hello, $displayName',
-                    style: GoogleFonts.poppins(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                  );
+                  return Text('Hello, $displayName', style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.w600, color: Colors.black87));
                 },
               ),
             ),
             const SizedBox(height: 12),
-            // Display Aktivity
-
-            // Display User Skills
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Card(
                 elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: Colors.teal, width: 1),
-                ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Colors.teal, width: 1)),
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Your Skills',
-                        style: GoogleFonts.poppins(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.teal,
-                        ),
-                      ),
+                      Text('Your Skills', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.teal)),
                       const SizedBox(height: 8),
                       _userSkills.isEmpty
                           ? Row(
                         children: [
-                          Text(
-                            'No skills added. Go to Skills Tags to add skills.',
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                            ),
-                          ),
+                          Text('No skills added. Go to Skills Tags to add skills.', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])),
                           const SizedBox(width: 8),
                           GestureDetector(
-                            onTap: () {
-                              Navigator.pushNamed(context, '/SkillTagScreen');
-                            },
-                            child: Text(
-                              'Add skills',
-                              style: GoogleFonts.poppins(
-                                fontSize: 14,
-                                color: Colors.teal,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                            onTap: () => Navigator.pushNamed(context, '/SkillTagScreen'),
+                            child: Text('Add skills', style: GoogleFonts.poppins(fontSize: 14, color: Colors.teal, fontWeight: FontWeight.w600)),
                           ),
                         ],
                       )
                           : Wrap(
                         spacing: 8.0,
                         runSpacing: 8.0,
-                        children: _userSkills
-                            .split(',')
-                            .map((skill) => ActionChip(
-                          label: Text(
-                            skill.trim(),
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
+                        children: _userSkills.split(',').map((skill) => ActionChip(
+                          label: Text(skill.trim(), style: GoogleFonts.poppins(fontSize: 14, color: Colors.white, fontWeight: FontWeight.w500)),
                           backgroundColor: Colors.teal,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          onPressed: () {
-                            Navigator.pushNamed(context, '/SkillTagScreen');
-                          },
-                        ))
-                            .toList(),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                          onPressed: () => Navigator.pushNamed(context, '/SkillTagScreen'),
+                        )).toList(),
                       ),
                       const SizedBox(height: 8),
                       TextButton(
-                        onPressed: () {
-                          Navigator.pushNamed(context, '/SkillTagScreen');
-                        },
-                        child: Text(
-                          'Manage Skills',
-                          style: GoogleFonts.poppins(
-                            color: Colors.teal,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            decoration: TextDecoration.underline,
-                          ),
+                        onPressed: () => Navigator.pushNamed(context, '/SkillTagScreen'),
+                        child: Text('Manage Skills', style: GoogleFonts.poppins(color: Colors.teal, fontSize: 14, fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: ListTile(
+                  title: Text('Smart Jobs Suggestions', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black87)),
+                  subtitle: Text('Show jobs matching all your skills', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])),
+                  trailing: Switch(
+                    value: _isSkillsFilterEnabled,
+                    onChanged: (value) => setState(() => _isSkillsFilterEnabled = value),
+                    activeColor: Colors.teal,
+                    activeTrackColor: Colors.teal.withOpacity(0.3),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: ListTile(
+                  title: Text('AI-Powered Suggestions', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black87)),
+                  subtitle: Text(
+                    _relatedSkills.isEmpty && _isAIPoweredFilterEnabled
+                        ? 'No related skills available. Try adding more skills.'
+                        : 'Show jobs matching your skills or related categories',
+                    style: GoogleFonts.poppins(fontSize: 12, color: _relatedSkills.isEmpty && _isAIPoweredFilterEnabled ? Colors.redAccent : Colors.grey[600]),
+                  ),
+                  trailing: Switch(
+                    value: _isAIPoweredFilterEnabled,
+                    onChanged: (value) => setState(() => _isAIPoweredFilterEnabled = value),
+                    activeColor: Colors.teal,
+                    activeTrackColor: Colors.teal.withOpacity(0.3),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (value) => setState(() => _searchQuery = value.toLowerCase()),
+                decoration: InputDecoration(
+                  hintText: 'Search job title or skill...',
+                  prefixIcon: const Icon(Icons.search, color: Colors.teal),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(icon: const Icon(Icons.clear, color: Colors.teal), onPressed: () => setState(() { _searchController.clear(); _searchQuery = ''; }))
+                      : null,
+                  hintStyle: GoogleFonts.poppins(color: Colors.grey[600]),
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.teal, width: 1)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.teal, width: 2)),
+                ),
+                style: GoogleFonts.poppins(color: Colors.black87),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text('Job Analysis', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black87)),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Colors.teal, width: 1)),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // Today's Applied Tasks (Working, unchanged)
+                      Expanded(
+                        child: StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(currentUser.uid)
+                              .collection('tasks')
+                              .where(FieldPath.documentId, isGreaterThanOrEqualTo: startOfDay.toIso8601String().split('T')[0])
+                              .where(FieldPath.documentId, isLessThan: endOfDay.toIso8601String().split('T')[0])
+                              .snapshots(),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return _buildSummaryBox(title: 'Today\'s Applied Jobs', count: 0, icon: Icons.send, isLoading: true);
+                            }
+                            if (snapshot.hasError) {
+                              print('Error in Today\'s Applied Tasks: ${snapshot.error}');
+                              return _buildSummaryBox(title: 'Today\'s Applied Jobs', count: 0, icon: Icons.send, error: true);
+                            }
+                            int count = snapshot.hasData
+                                ? snapshot.data!.docs.fold(0, (sum, doc) {
+                              final tasks = (doc.data() as Map<String, dynamic>)['tasks'] as List? ?? [];
+                              return sum + tasks.length;
+                            })
+                                : 0;
+                            print('Today\'s Applied Tasks count: $count');
+                            return _buildSummaryBox(title: 'Today\'s Applied Jobs', count: count, icon: Icons.send);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Total Tasks
+                      Expanded(
+                        child: StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection('jobs')
+                              .snapshots(),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return _buildSummaryBox(title: 'Total Jobs', count: 0, icon: Icons.list_alt, isLoading: true);
+                            }
+                            if (snapshot.hasError) {
+                              print('Error in Total Tasks: ${snapshot.error}');
+                              return _buildSummaryBox(title: 'Total Jobs', count: 0, icon: Icons.list_alt, error: true);
+                            }
+                            int count = snapshot.hasData ? snapshot.data!.docs.length : 0;
+                            print('Total Tasks count: $count');
+                            if (count == 0) {
+                              print('No tasks found in jobs collection.');
+                            }
+                            return _buildSummaryBox(title: 'Total Jobs', count: count, icon: Icons.list_alt);
+                          },
                         ),
                       ),
                     ],
@@ -365,166 +390,22 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            // Smart Jobs Suggestions Toggle
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: ListTile(
-                  title: Text(
-                    'Smart Jobs Suggestions',
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  subtitle: Text(
-                    'Show jobs matching all your skills',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  trailing: Switch(
-                    value: _isSkillsFilterEnabled,
-                    onChanged: (value) {
-                      setState(() {
-                        _isSkillsFilterEnabled = value;
-                      });
-                    },
-                    activeColor: Colors.teal,
-                    activeTrackColor: Colors.teal.withOpacity(0.3),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            // AI-Powered Suggestions Toggle
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: ListTile(
-                  title: Text(
-                    'AI-Powered Suggestions',
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  subtitle: Text(
-                    _relatedSkills.isEmpty && _isAIPoweredFilterEnabled
-                        ? 'No related skills available. Try adding more skills.'
-                        : 'Show jobs matching your skills or related categories',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: _relatedSkills.isEmpty && _isAIPoweredFilterEnabled ? Colors.redAccent : Colors.grey[600],
-                    ),
-                  ),
-                  trailing: Switch(
-                    value: _isAIPoweredFilterEnabled,
-                    onChanged: (value) {
-                      setState(() {
-                        _isAIPoweredFilterEnabled = value;
-                      });
-                    },
-                    activeColor: Colors.teal,
-                    activeTrackColor: Colors.teal.withOpacity(0.3),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            // Search Bar
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _searchController,
-                onChanged: (value) {
-                  setState(() {
-                    _searchQuery = value.toLowerCase();
-                  });
-                },
-                decoration: InputDecoration(
-                  hintText: 'Search job title or skill...',
-                  prefixIcon: const Icon(Icons.search, color: Colors.teal),
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                    icon: const Icon(Icons.clear, color: Colors.teal),
-                    onPressed: () {
-                      setState(() {
-                        _searchController.clear();
-                        _searchQuery = '';
-                      });
-                    },
-                  )
-                      : null,
-                  hintStyle: GoogleFonts.poppins(color: Colors.grey[600]),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.teal, width: 1),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.teal, width: 2),
-                  ),
-                ),
-                style: GoogleFonts.poppins(color: Colors.black87),
-              ),
-            ),
-            const SizedBox(height: 12),
-            // Recently Added Jobs
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'Recently Added Jobs',
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('jobs')
-                  .orderBy('postedAt', descending: true)
-                  .snapshots(),
+              stream: FirebaseFirestore.instance.collection('jobs').orderBy('postedAt', descending: true).snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator(color: Colors.teal));
                 }
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Text(
-                      'No jobs available.',
-                      style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600]),
-                    ),
-                  );
+                  return Center(child: Text('No jobs available.', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])));
                 }
                 final jobs = snapshot.data!.docs.where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   final isAccepted = data['isAccepted'] == true;
-                  final isOwner = data['postedBy'] == currentUser!.uid;
-                  if (isAccepted || isOwner) return false; // Exclude accepted jobs and jobs posted by the current user
+                  final isOwner = data['postedBy'] == currentUser.uid;
+                  if (isAccepted || isOwner) return false;
 
-                  final jobPosition = data['jobPosition']?.toString().toLowerCase() ?? '';
+                  final jobPosition = data['jobPosition']?.toLowerCase() ?? '';
                   List<String> requiredSkills = [];
                   var skillData = data['requiredSkill'];
                   if (skillData != null) {
@@ -536,20 +417,17 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                   bool matchesSmartFilter = true;
                   bool matchesAIFilter = true;
 
-                  // Apply smart jobs filter if enabled
                   if (_isSkillsFilterEnabled && _userSkills.isNotEmpty) {
                     final userSkillsList = _userSkills.split(',').map((s) => s.trim().toLowerCase()).toList();
                     matchesSmartFilter = requiredSkills.isNotEmpty && requiredSkills.every((skill) => userSkillsList.contains(skill));
                   }
 
-                  // Apply AI-powered filter if enabled
                   if (_isAIPoweredFilterEnabled && _userSkills.isNotEmpty) {
                     final userSkillsList = _userSkills.split(',').map((s) => s.trim().toLowerCase()).toList();
                     final combinedSkills = [...userSkillsList, ..._relatedSkills.map((s) => s.toLowerCase())];
                     matchesAIFilter = requiredSkills.isEmpty || requiredSkills.any((skill) => combinedSkills.contains(skill));
                   }
 
-                  // Apply search query filter
                   bool matchesSearch = true;
                   if (_searchQuery.isNotEmpty) {
                     final matchesJobPosition = jobPosition.contains(_searchQuery);
@@ -557,7 +435,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                     matchesSearch = matchesJobPosition || matchesSkill;
                   }
 
-                  // Include job if it matches the enabled filters and search query
                   if (_isSkillsFilterEnabled && _isAIPoweredFilterEnabled) {
                     return matchesSmartFilter && matchesAIFilter && matchesSearch;
                   } else if (_isSkillsFilterEnabled) {
@@ -571,10 +448,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                 return Column(
                   children: jobs.map((job) {
                     final data = job.data() as Map<String, dynamic>;
-                    if ((data['jobPosition'] == null || data['jobPosition'].toString().trim().isEmpty) &&
-                        (data['description'] == null || data['description'].toString().trim().isEmpty)) {
-                      return const SizedBox.shrink();
-                    }
+                    if ((data['jobPosition']?.trim().isEmpty ?? true) && (data['description']?.trim().isEmpty ?? true)) return const SizedBox.shrink();
                     final jobPosition = data['jobPosition'] ?? 'N/A';
                     final taskType = data['isShortTerm'] == true ? 'Short-term' : 'Long-term';
                     final startDate = data['startDate'] ?? '-';
@@ -584,39 +458,17 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                     return Card(
                       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       elevation: 3,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: ListTile(
                         contentPadding: const EdgeInsets.all(12),
-                        title: Text(
-                          jobPosition,
-                          style: GoogleFonts.poppins(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black87,
-                          ),
-                        ),
+                        title: Text(jobPosition, style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87)),
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              'Task Type: $taskType',
-                              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
-                            ),
-                            Text(
-                              'Start Date: $startDate',
-                              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
-                            ),
-                            if (startTime.isNotEmpty)
-                              Text(
-                                'Start Time: $startTime',
-                                style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
-                              ),
-                            Text(
-                              'Salary: RM $salary',
-                              style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
-                            ),
+                            Text('Task Type: $taskType', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                            Text('Start Date: $startDate', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                            if (startTime.isNotEmpty) Text('Start Time: $startTime', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                            Text('Salary: RM $salary', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
                             if (data['requiredSkill'] != null)
                               Text(
                                 'Skill Required: ${data['requiredSkill'] is String ? (data['requiredSkill'] as String).split(',').join(', ') : (data['requiredSkill'] as List).join(', ')}',
@@ -626,16 +478,9 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                         ),
                         onTap: () {
                           print('Navigating to JobDetailPage with jobId: ${job.id}');
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => JobDetailPage(data: data, jobId: job.id),
-                            ),
-                          ).then((value) {
-                            print('Returned from JobDetailPage');
-                          }).catchError((error) {
-                            print('Navigation error: $error');
-                          });
+                          Navigator.push(context, MaterialPageRoute(builder: (context) => JobDetailPage(data: data, jobId: job.id)))
+                              .then((value) => print('Returned from JobDetailPage'))
+                              .catchError((error) => print('Navigation error: $error'));
                         },
                       ),
                     );
@@ -648,11 +493,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         floatingActionButton: Padding(
           padding: const EdgeInsets.only(bottom: 16),
           child: FloatingActionButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => const AddJobPage()),
-              );
-            },
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AddJobPage())),
             backgroundColor: Colors.teal,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: const Icon(Icons.add, size: 30),
@@ -660,6 +501,29 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
           ),
         ),
         floatingActionButtonLocation: FloatingActionButtonLocation.endDocked,
+      ),
+    );
+  }
+
+  Widget _buildSummaryBox({required String title, required int count, required IconData icon, bool isLoading = false, bool error = false}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.teal.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.teal, width: 1),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (isLoading) const CircularProgressIndicator(color: Colors.teal, strokeWidth: 2)
+          else if (error) const Icon(Icons.error_outline, color: Colors.redAccent, size: 24)
+          else Icon(icon, color: Colors.teal, size: 24),
+          const SizedBox(height: 8),
+          Text(error ? 'Error' : '$count', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w600, color: error ? Colors.redAccent : Colors.teal)),
+          const SizedBox(height: 4),
+          Text(title, textAlign: TextAlign.center, style: GoogleFonts.poppins(fontSize: 12, color: Colors.black87, fontWeight: FontWeight.w500)),
+        ],
       ),
     );
   }
