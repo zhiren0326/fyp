@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fyp/module/ChatMessage.dart';
-import 'package:intl/intl.dart';
 import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
