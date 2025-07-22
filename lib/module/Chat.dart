@@ -116,12 +116,14 @@ class _ChatScreenState extends State<ChatScreen> {
             .collection('groups')
             .doc(groupId)
             .get();
-        groups.add({
-          'groupId': groupId,
-          'name': groupDoc['name'] ?? 'Group $groupId',
-          'photoURL': groupDoc['photoURL'] ?? 'assets/group_icon.png',
-          'description': groupDoc['description'] ?? '',
-        });
+        if (groupDoc.exists) {
+          groups.add({
+            'groupId': groupId,
+            'name': groupDoc['name'] ?? 'Group $groupId',
+            'photoURL': groupDoc['photoURL'] ?? 'assets/group_icon.png',
+            'description': groupDoc['description'] ?? '',
+          });
+        }
       }
 
       setState(() {
@@ -197,6 +199,13 @@ class _ChatScreenState extends State<ChatScreen> {
         'joinedAt': FieldValue.serverTimestamp(),
       });
 
+      await _addChat(
+        groupId,
+        'Group $groupId',
+        'assets/group_icon.png',
+        isGroup: true,
+      );
+
       setState(() {
         _createdGroups.add({
           'groupId': groupId,
@@ -214,7 +223,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
 
-      // Copy the group ID to clipboard
       Clipboard.setData(ClipboardData(text: groupId));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -307,6 +315,30 @@ class _ChatScreenState extends State<ChatScreen> {
                   if (base64Image != null) 'photoURL': base64Image,
                 });
 
+                // Update chat list for all group members
+                final memberDocs = await FirebaseFirestore.instance
+                    .collection('groups')
+                    .doc(groupId)
+                    .collection('members')
+                    .get();
+                for (var member in memberDocs.docs) {
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(member['userId'])
+                      .collection('chats')
+                      .doc('chat_list')
+                      .set({
+                    'users': FieldValue.arrayUnion([
+                      {
+                        'customId': groupId,
+                        'name': nameController.text.trim(),
+                        'photoURL': base64Image ?? 'assets/group_icon.png',
+                        'isGroup': true,
+                      }
+                    ])
+                  }, SetOptions(merge: true));
+                }
+
                 setState(() {
                   final index = _createdGroups.indexWhere((g) => g['groupId'] == groupId);
                   if (index != -1) {
@@ -384,16 +416,19 @@ class _ChatScreenState extends State<ChatScreen> {
     if (confirmDelete != true) return;
 
     try {
+      // Delete from group_ids
       await FirebaseFirestore.instance
           .collection('group_ids')
           .doc(groupId)
           .delete();
 
+      // Delete from groups
       await FirebaseFirestore.instance
           .collection('groups')
           .doc(groupId)
           .delete();
 
+      // Delete from all members' groups and chat list
       final memberDocs = await FirebaseFirestore.instance
           .collection('groups')
           .doc(groupId)
@@ -404,6 +439,30 @@ class _ChatScreenState extends State<ChatScreen> {
             .collection('users')
             .doc(member['userId'])
             .collection('groups')
+            .doc(groupId)
+            .delete();
+
+        // Remove from member's chat list
+        final chatDocRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(member['userId'])
+            .collection('chats')
+            .doc('chat_list');
+        await FirebaseFirestore.instance.runTransaction((transaction) async {
+          final doc = await transaction.get(chatDocRef);
+          if (doc.exists) {
+            List<Map<String, dynamic>> updatedChatList =
+            List<Map<String, dynamic>>.from(doc.data()?['users'] ?? []);
+            updatedChatList.removeWhere((chat) => chat['customId'] == groupId);
+            transaction.set(chatDocRef, {'users': updatedChatList}, SetOptions(merge: true));
+          }
+        });
+
+        // Delete last message notification
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(member['userId'])
+            .collection('messages')
             .doc(groupId)
             .delete();
       }
@@ -441,14 +500,19 @@ class _ChatScreenState extends State<ChatScreen> {
         .snapshots()
         .listen((snapshot) {
       for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('You have 1 new message!'),
-              backgroundColor: Colors.teal[700],
-              duration: const Duration(seconds: 3),
-            ),
-          );
+        if (change.type == DocumentChangeType.added || change.type == DocumentChangeType.modified) {
+          final data = change.doc.data();
+          if (data != null && data['groupId'] != null) {
+            final sender = data['senderCustomId'];
+            final content = data['type'] == 'file' ? 'Sent a file: ${data['fileName']}' : data['lastMessage'];
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('New message in group ${data['groupId']}: $content from $sender'),
+                backgroundColor: Colors.teal[700],
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
         }
       }
     });

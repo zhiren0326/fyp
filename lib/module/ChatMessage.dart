@@ -3,11 +3,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:translator/translator.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:record/record.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
+import 'package:path/path.dart' as path;
 
 class ChatMessage extends StatefulWidget {
   final String currentUserCustomId;
@@ -29,60 +29,39 @@ class ChatMessage extends StatefulWidget {
 
 class _ChatMessageState extends State<ChatMessage> {
   final TextEditingController _messageController = TextEditingController();
-  final GoogleTranslator _translator = GoogleTranslator();
-  final stt.SpeechToText _speech = stt.SpeechToText();
+  final AudioRecorder _recorder = AudioRecorder();
+  final ScrollController _scrollController = ScrollController();
   static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo';
   String _selectedLanguage = 'en'; // Default language
   final List<String> _languages = [
     'en', 'es', 'fr', 'de', 'it', 'ja', 'ko', 'zh-cn', 'ru', 'ar'
   ]; // Supported languages
-  bool _isListening = false;
-  String _recognizedText = '';
+  bool _isRecording = false;
+  String? _recordedFilePath;
+  bool _isGroup = false;
 
   @override
   void initState() {
     super.initState();
-    _initializeSpeech();
+    _checkIfGroup();
   }
 
-  Future<void> _initializeSpeech() async {
-    try {
-      bool available = await _speech.initialize(
-        onStatus: (status) {
-          setState(() => _isListening = status == 'listening');
-          if (status == 'done') {
-            _speech.stop();
-          }
-        },
-        onError: (error) {
-          setState(() => _isListening = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Speech recognition error: ${error.errorMsg}'),
-              backgroundColor: Colors.red[700],
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        },
-      );
-      if (!available) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Speech recognition not available. Please check microphone permissions.'),
-            backgroundColor: Colors.red[700],
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to initialize speech recognition: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _recorder.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkIfGroup() async {
+    final groupDoc = await FirebaseFirestore.instance
+        .collection('groups')
+        .doc(widget.selectedCustomId)
+        .get();
+    setState(() {
+      _isGroup = groupDoc.exists;
+    });
   }
 
   String _getChatRoomId(String customId1, String customId2) {
@@ -91,14 +70,11 @@ class _ChatMessageState extends State<ChatMessage> {
         : '${customId2}_$customId1';
   }
 
-  Future<void> _sendMessage({PlatformFile? file, String? text}) async {
+  Future<void> _sendMessage({PlatformFile? file, String? text, String? voicePath}) async {
     String messageText = text ?? _messageController.text;
-    if (messageText.isEmpty && file == null) return;
+    if (messageText.isEmpty && file == null && voicePath == null) return;
 
     try {
-      final chatRoomId = _getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId);
-      final collectionPath = 'chat_rooms/$chatRoomId/messages';
-
       final currentUserDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc((await FirebaseFirestore.instance
@@ -112,10 +88,44 @@ class _ChatMessageState extends State<ChatMessage> {
 
       String? fileBase64;
       String? fileName;
+      String? voiceBase64;
+      String? voiceFileName;
+      String type = 'text';
+
       if (file != null) {
         final fileBytes = await File(file.path!).readAsBytes();
+        if (fileBytes.length > 500 * 1024) {
+          // Limit to 500KB
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('File size exceeds 500KB limit.'),
+              backgroundColor: Colors.red[700],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+          return;
+        }
         fileBase64 = base64Encode(fileBytes);
         fileName = file.name;
+        type = 'file';
+      }
+
+      if (voicePath != null) {
+        final voiceBytes = await File(voicePath).readAsBytes();
+        if (voiceBytes.length > 500 * 1024) {
+          // Limit to 500KB
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Voice file size exceeds 500KB limit.'),
+              backgroundColor: Colors.red[700],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+          return;
+        }
+        voiceBase64 = base64Encode(voiceBytes);
+        voiceFileName = path.basename(voicePath);
+        type = 'voice';
       }
 
       final messageData = {
@@ -125,12 +135,72 @@ class _ChatMessageState extends State<ChatMessage> {
         'timestamp': FieldValue.serverTimestamp(),
         'fileBase64': fileBase64,
         'fileName': fileName,
+        'voiceBase64': voiceBase64,
+        'voiceFileName': voiceFileName,
         'originalLanguage': 'en',
+        'isPinned': false,
+        'type': type,
       };
 
-      await FirebaseFirestore.instance.collection(collectionPath).add(messageData);
+      if (_isGroup) {
+        // Store message in group messages collection
+        await FirebaseFirestore.instance
+            .collection('groups')
+            .doc(widget.selectedCustomId)
+            .collection('messages')
+            .add(messageData);
+
+        // Update last message for all group members
+        final memberDocs = await FirebaseFirestore.instance
+            .collection('groups')
+            .doc(widget.selectedCustomId)
+            .collection('members')
+            .get();
+        for (var member in memberDocs.docs) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(member['userId'])
+              .collection('messages')
+              .doc(widget.selectedCustomId)
+              .set({
+            'lastMessage': messageText,
+            'timestamp': FieldValue.serverTimestamp(),
+            'senderCustomId': widget.currentUserCustomId,
+            'groupId': widget.selectedCustomId,
+            'type': type,
+            if (fileName != null) 'fileName': fileName,
+            if (voiceFileName != null) 'voiceFileName': voiceFileName,
+          }, SetOptions(merge: true));
+        }
+      } else {
+        // Store message for one-to-one chat
+        final chatRoomId = _getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId);
+        final collectionPath = 'chat_rooms/$chatRoomId/messages';
+        await FirebaseFirestore.instance.collection(collectionPath).add(messageData);
+
+        // Update last message for both users
+        final recipientUserId = (await FirebaseFirestore.instance
+            .collection('custom_ids')
+            .where('customId', isEqualTo: widget.selectedCustomId)
+            .get())
+            .docs[0]['userId'];
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(recipientUserId)
+            .collection('messages')
+            .doc(widget.currentUserCustomId)
+            .set({
+          'lastMessage': messageText,
+          'timestamp': FieldValue.serverTimestamp(),
+          'senderCustomId': widget.currentUserCustomId,
+          'type': type,
+          if (fileName != null) 'fileName': fileName,
+          if (voiceFileName != null) 'voiceFileName': voiceFileName,
+        }, SetOptions(merge: true));
+      }
+
       _messageController.clear();
-      setState(() => _recognizedText = '');
+      _scrollToBottom();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -144,9 +214,14 @@ class _ChatMessageState extends State<ChatMessage> {
 
   Future<void> _pickFile() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles();
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['txt', 'pdf'],
+      );
       if (result != null) {
-        await _sendMessage(file: result.files.first);
+        final file = result.files.first;
+        final translatedText = await _translateFile(file);
+        await _sendMessage(file: file, text: translatedText);
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -156,6 +231,160 @@ class _ChatMessageState extends State<ChatMessage> {
           duration: const Duration(seconds: 3),
         ),
       );
+    }
+  }
+
+  Future<void> _togglePinMessage(String messageId) async {
+    try {
+      final collectionPath = _isGroup
+          ? 'groups/${widget.selectedCustomId}/messages'
+          : 'chat_rooms/${_getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId)}/messages';
+      final messageRef = FirebaseFirestore.instance.collection(collectionPath).doc(messageId);
+      final message = await messageRef.get();
+      final isPinned = message['isPinned'] ?? false;
+      await messageRef.update({'isPinned': !isPinned});
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to pin/unpin message: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _startRecording() async {
+    try {
+      if (await _recorder.hasPermission()) {
+        final directory = await getTemporaryDirectory();
+        final filePath = '${directory.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        await _recorder.start(
+          const RecordConfig(encoder: AudioEncoder.aacLc),
+          path: filePath,
+        );
+        setState(() {
+          _isRecording = true;
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Recording permission denied: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    try {
+      final path = await _recorder.stop();
+      setState(() {
+        _isRecording = false;
+        _recordedFilePath = path;
+      });
+      if (_recordedFilePath != null) {
+        final transcribedText = await _transcribeAndTranslateVoice(_recordedFilePath!);
+        await _sendMessage(voicePath: _recordedFilePath, text: transcribedText);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to process recording: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<String> _transcribeAndTranslateVoice(String filePath) async {
+    try {
+      final fileBytes = await File(filePath).readAsBytes();
+      final base64Audio = base64Encode(fileBytes);
+
+      final response = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'contents': [
+            {
+              'parts': [
+                {
+                  'inlineData': {
+                    'mimeType': 'audio/mp4',
+                    'data': base64Audio,
+                  },
+                },
+                {'text': 'Transcribe this audio and translate it to $_selectedLanguage.'}
+              ],
+            },
+          ],
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['candidates'][0]['content']['parts'][0]['text'];
+      } else {
+        throw Exception('Failed to transcribe/translate: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Voice transcription/translation error: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return '';
+    }
+  }
+
+  Future<String> _translateFile(PlatformFile file) async {
+    try {
+      final fileBytes = await File(file.path!).readAsBytes();
+      String content = '';
+      if (file.extension == 'txt') {
+        content = utf8.decode(fileBytes);
+      } else if (file.extension == 'pdf') {
+        // Note: PDF parsing requires additional packages like `pdf_text`
+        content = 'PDF content extraction not implemented'; // Placeholder
+      }
+
+      if (_selectedLanguage == 'en') return content;
+
+      final response = await http.post(
+        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiApiKey'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'contents': [
+            {
+              'parts': [
+                {'text': 'Translate the following text to $_selectedLanguage: $content'}
+              ]
+            }
+          ]
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['candidates'][0]['content']['parts'][0]['text'];
+      } else {
+        throw Exception('Failed to translate file: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('File translation error: $e'),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return '';
     }
   }
 
@@ -194,69 +423,41 @@ class _ChatMessageState extends State<ChatMessage> {
     }
   }
 
-  Future<void> _startListening() async {
-    if (!_isListening) {
-      try {
-        bool available = await _speech.isAvailable;
-        if (!available) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Microphone not available. Please check permissions.'),
-              backgroundColor: Colors.red[700],
-              duration: const Duration(seconds: 3),
-            ),
-          );
-          return;
-        }
-
-        await _speech.listen(
-          onResult: (result) async {
-            setState(() {
-              _recognizedText = result.recognizedWords;
-              _messageController.text = _recognizedText;
-            });
-            if (result.finalResult && _recognizedText.isNotEmpty) {
-              await Future.delayed(Duration(milliseconds: 500)); // Ensure stability
-              final translatedText = await _translateMessage(_recognizedText, _selectedLanguage);
-              await _sendMessage(text: translatedText);
-              await _speech.stop();
-            }
-          },
-          localeId: _selectedLanguage, // Use selected language for speech recognition
-          cancelOnError: true,
-          partialResults: true,
-        );
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to start speech recognition: $e'),
-            backgroundColor: Colors.red[700],
-            duration: const Duration(seconds: 3),
-          ),
-        );
-        setState(() => _isListening = false);
-      }
-    } else {
-      await _speech.stop();
-      setState(() => _isListening = false);
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0.0, // Reverse list, so scroll to 0 for newest messages
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
     }
-  }
-
-  @override
-  void dispose() {
-    _messageController.dispose();
-    _speech.stop();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.selectedUserName),
+        title: Row(
+          children: [
+            CircleAvatar(
+              backgroundImage: widget.selectedUserPhotoURL.startsWith('assets/')
+                  ? AssetImage(widget.selectedUserPhotoURL)
+                  : (widget.selectedUserPhotoURL.startsWith('data:image')
+                  ? MemoryImage(base64Decode(widget.selectedUserPhotoURL.split(',')[1]))
+                  : NetworkImage(widget.selectedUserPhotoURL)) as ImageProvider,
+              radius: 20,
+              onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              widget.selectedUserName,
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
         backgroundColor: Colors.teal[800],
         leading: IconButton(
-          icon: Icon(Icons.arrow_back),
+          icon: Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
@@ -294,7 +495,14 @@ class _ChatMessageState extends State<ChatMessage> {
           children: [
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
+                stream: _isGroup
+                    ? FirebaseFirestore.instance
+                    .collection('groups')
+                    .doc(widget.selectedCustomId)
+                    .collection('messages')
+                    .orderBy('timestamp', descending: true)
+                    .snapshots()
+                    : FirebaseFirestore.instance
                     .collection(
                     'chat_rooms/${_getChatRoomId(widget.currentUserCustomId, widget.selectedCustomId)}/messages')
                     .orderBy('timestamp', descending: true)
@@ -321,13 +529,16 @@ class _ChatMessageState extends State<ChatMessage> {
                   }
 
                   final messages = snapshot.data!.docs;
+                  WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
                   return ListView.builder(
+                    controller: _scrollController,
                     reverse: true,
                     itemCount: messages.length,
                     itemBuilder: (context, index) {
                       final message = messages[index];
                       final isMe = message['senderCustomId'] == widget.currentUserCustomId;
+                      final isPinned = message['isPinned'] ?? false;
 
                       return FutureBuilder<String>(
                         future: _translateMessage(message['text'] ?? '', _selectedLanguage),
@@ -336,96 +547,149 @@ class _ChatMessageState extends State<ChatMessage> {
                           return ListTile(
                             leading: CircleAvatar(
                               backgroundImage: widget.selectedUserPhotoURL.startsWith('assets/')
-                                  ? AssetImage(widget.selectedUserPhotoURL) as ImageProvider
-                                  : NetworkImage(widget.selectedUserPhotoURL),
+                                  ? AssetImage(widget.selectedUserPhotoURL)
+                                  : (widget.selectedUserPhotoURL.startsWith('data:image')
+                                  ? MemoryImage(
+                                  base64Decode(widget.selectedUserPhotoURL.split(',')[1]))
+                                  : NetworkImage(widget.selectedUserPhotoURL)) as ImageProvider,
                               radius: 20,
                               onBackgroundImageError: (_, __) =>
                                   AssetImage('assets/default_avatar.png'),
                             ),
-                            title: Container(
-                              padding: const EdgeInsets.all(16),
-                              margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
-                              decoration: BoxDecoration(
-                                color: isMe
-                                    ? Colors.teal[100]!.withOpacity(0.9)
-                                    : Colors.white.withOpacity(0.9),
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black12,
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                crossAxisAlignment:
-                                isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    message['senderName'] ?? 'Unknown',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.teal[800],
+                            title: GestureDetector(
+                              onLongPress: () => _togglePinMessage(message.id),
+                              child: Container(
+                                padding: const EdgeInsets.all(16),
+                                margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
+                                decoration: BoxDecoration(
+                                  color: isMe
+                                      ? Colors.teal[100]!.withOpacity(0.9)
+                                      : Colors.white.withOpacity(0.9),
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black12,
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
                                     ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  if (translatedText.isNotEmpty)
+                                  ],
+                                  border: isPinned
+                                      ? Border.all(color: Colors.yellow[700]!, width: 2)
+                                      : null,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                  isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                  children: [
                                     Text(
-                                      translatedText,
+                                      message['senderName'] ?? 'Unknown',
                                       style: TextStyle(
-                                        color: Colors.teal[900],
-                                        fontSize: 18,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.teal[800],
                                       ),
                                     ),
-                                  if (message['fileBase64'] != null)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 8),
-                                      child: InkWell(
-                                        onTap: () async {
-                                          // Decode and save the file locally for viewing
-                                          try {
-                                            final bytes = base64Decode(message['fileBase64']);
-                                            final directory = await getTemporaryDirectory();
-                                            final file = File('${directory.path}/${message['fileName']}');
-                                            await file.writeAsBytes(bytes);
-                                            // Use a package like open_file to open the file
-                                            // For now, show a snackbar
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text('File downloaded to ${file.path}'),
-                                                backgroundColor: Colors.teal[700],
-                                                duration: const Duration(seconds: 3),
-                                              ),
-                                            );
-                                          } catch (e) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text('Failed to download file: $e'),
-                                                backgroundColor: Colors.red[700],
-                                                duration: const Duration(seconds: 3),
-                                              ),
-                                            );
-                                          }
-                                        },
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(Icons.attach_file, color: Colors.teal[800]),
-                                            SizedBox(width: 8),
-                                            Text(
-                                              message['fileName'] ?? 'File',
-                                              style: TextStyle(
-                                                color: Colors.teal[800],
-                                                decoration: TextDecoration.underline,
-                                              ),
-                                            ),
-                                          ],
+                                    const SizedBox(height: 6),
+                                    if (translatedText.isNotEmpty)
+                                      Text(
+                                        translatedText,
+                                        style: TextStyle(
+                                          color: Colors.teal[900],
+                                          fontSize: 18,
                                         ),
                                       ),
-                                    ),
-                                ],
+                                    if (message['fileBase64'] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: InkWell(
+                                          onTap: () async {
+                                            try {
+                                              final bytes = base64Decode(message['fileBase64']);
+                                              final directory = await getTemporaryDirectory();
+                                              final file =
+                                              File('${directory.path}/${message['fileName']}');
+                                              await file.writeAsBytes(bytes);
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content:
+                                                  Text('File downloaded to ${file.path}'),
+                                                  backgroundColor: Colors.teal[700],
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('Failed to download file: $e'),
+                                                  backgroundColor: Colors.red[700],
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.attach_file, color: Colors.teal[800]),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                message['fileName'] ?? 'File',
+                                                style: TextStyle(
+                                                  color: Colors.teal[800],
+                                                  decoration: TextDecoration.underline,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    if (message['voiceBase64'] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: InkWell(
+                                          onTap: () async {
+                                            try {
+                                              final bytes = base64Decode(message['voiceBase64']);
+                                              final directory = await getTemporaryDirectory();
+                                              final file = File(
+                                                  '${directory.path}/${message['voiceFileName']}');
+                                              await file.writeAsBytes(bytes);
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content:
+                                                  Text('Voice file downloaded to ${file.path}'),
+                                                  backgroundColor: Colors.teal[700],
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('Failed to download voice: $e'),
+                                                  backgroundColor: Colors.red[700],
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.mic, color: Colors.teal[800]),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'Voice Message',
+                                                style: TextStyle(
+                                                  color: Colors.teal[800],
+                                                  decoration: TextDecoration.underline,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                               ),
                             ),
                             subtitle: Padding(
@@ -434,7 +698,7 @@ class _ChatMessageState extends State<ChatMessage> {
                                 message['timestamp'] != null
                                     ? DateFormat('hh:mm a')
                                     .format((message['timestamp'] as Timestamp).toDate())
-                                    : '',
+                                    : 'Sending...',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: Colors.teal[600],
@@ -459,11 +723,11 @@ class _ChatMessageState extends State<ChatMessage> {
                   ),
                   IconButton(
                     icon: Icon(
-                      _isListening ? Icons.mic : Icons.mic_none,
-                      color: Colors.teal[800],
+                      _isRecording ? Icons.stop : Icons.mic,
+                      color: _isRecording ? Colors.red[700] : Colors.teal[800],
                       size: 28,
                     ),
-                    onPressed: _startListening,
+                    onPressed: _isRecording ? _stopRecording : _startRecording,
                   ),
                   Expanded(
                     child: TextField(
@@ -492,7 +756,7 @@ class _ChatMessageState extends State<ChatMessage> {
                   ),
                   const SizedBox(width: 12),
                   ElevatedButton(
-                    onPressed: _sendMessage,
+                    onPressed: () => _sendMessage(),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.teal[800],
                       shape: RoundedRectangleBorder(

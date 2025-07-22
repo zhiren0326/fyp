@@ -6,6 +6,7 @@ import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import 'package:fyp/Add%20Job%20Module/EditingJobsPage.dart';
 import 'package:fyp/Notification%20Module/NotificationScreen.dart';
 import 'package:fyp/CalendarPage/CalendarPage.dart';
+import 'package:fyp/Reward%20Module/RewardPage.dart';
 import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Chat.dart';
@@ -33,7 +34,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     const ActivityLogScreen(),
     const CalendarPage(),
     const ChatScreen(),
-    const SettingsScreen(),
+    const RewardPage(),
     AccountPage(),
   ];
 
@@ -170,14 +171,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         ),
         actions: [
-          if (_userCreatedJobIds.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.task),
               onPressed: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => EditingJobsPage(userCreatedJobIds: _userCreatedJobIds, onEditJob: _editJob),
+                    builder: (context) => EditingJobsPage(),
                   ),
                 );
               },

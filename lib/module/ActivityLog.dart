@@ -18,7 +18,7 @@ final TextEditingController _searchController = TextEditingController();
 String _searchQuery = '';
 
 class _ActivityLogScreenState extends State<ActivityLogScreen> {
-  static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo'; // Hardcoded Gemini API key
+  static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo';
   bool _isSkillsFilterEnabled = false;
   bool _isAIPoweredFilterEnabled = false;
   String _userSkills = '';
@@ -31,7 +31,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Tap the + button to create a new task', style: GoogleFonts.poppins()),
-          duration: const Duration(seconds: 2),
+          duration: const Duration(seconds: 1),
           backgroundColor: Colors.teal,
         ),
       );
@@ -331,7 +331,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      // Today's Applied Tasks (Working, unchanged)
                       Expanded(
                         child: StreamBuilder<QuerySnapshot>(
                           stream: FirebaseFirestore.instance
@@ -361,7 +360,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // Total Tasks
                       Expanded(
                         child: StreamBuilder<QuerySnapshot>(
                           stream: FirebaseFirestore.instance
@@ -391,7 +389,10 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
             ),
             const SizedBox(height: 12),
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('jobs').orderBy('postedAt', descending: true).snapshots(),
+              stream: FirebaseFirestore.instance
+                  .collection('jobs')
+                  .orderBy('postedAt', descending: true)
+                  .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator(color: Colors.teal));
@@ -399,61 +400,80 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return Center(child: Text('No jobs available.', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])));
                 }
+
+                final currentUser = FirebaseAuth.instance.currentUser;
+                if (currentUser == null) {
+                  return Center(child: Text('Please log in.', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])));
+                }
+
+                // Filter jobs to exclude those created by the current user
                 final jobs = snapshot.data!.docs.where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
-                  final isAccepted = data['isAccepted'] == true;
                   final isOwner = data['postedBy'] == currentUser.uid;
-                  if (isAccepted || isOwner) return false;
+                  if (isOwner) return false; // Exclude user-created jobs
+                  final isAccepted = data['acceptedApplicants']?.contains(currentUser.uid) ?? false;
+                  final isFull = data['isFull'] ?? false;
 
-                  final jobPosition = data['jobPosition']?.toLowerCase() ?? '';
-                  List<String> requiredSkills = [];
-                  var skillData = data['requiredSkill'];
-                  if (skillData != null) {
-                    requiredSkills = skillData is String
-                        ? skillData.split(',').map((s) => s.trim().toLowerCase()).toList()
-                        : (skillData as List).map((e) => e.toString().toLowerCase()).toList();
+                  if (!isFull && !isAccepted) {
+                    final jobPosition = data['jobPosition']?.toLowerCase() ?? '';
+                    List<String> requiredSkills = [];
+                    var skillData = data['requiredSkill'];
+                    if (skillData != null) {
+                      requiredSkills = skillData is String
+                          ? skillData.split(',').map((s) => s.trim().toLowerCase()).toList()
+                          : (skillData as List).map((e) => e.toString().toLowerCase()).toList();
+                    }
+
+                    bool matchesSmartFilter = true;
+                    bool matchesAIFilter = true;
+
+                    if (_isSkillsFilterEnabled && _userSkills.isNotEmpty) {
+                      final userSkillsList = _userSkills.split(',').map((s) => s.trim().toLowerCase()).toList();
+                      matchesSmartFilter = requiredSkills.isNotEmpty && requiredSkills.every((skill) => userSkillsList.contains(skill));
+                    }
+
+                    if (_isAIPoweredFilterEnabled && _userSkills.isNotEmpty) {
+                      final userSkillsList = _userSkills.split(',').map((s) => s.trim().toLowerCase()).toList();
+                      final combinedSkills = [...userSkillsList, ..._relatedSkills.map((s) => s.toLowerCase())];
+                      matchesAIFilter = requiredSkills.isEmpty || requiredSkills.any((skill) => combinedSkills.contains(skill));
+                    }
+
+                    bool matchesSearch = true;
+                    if (_searchQuery.isNotEmpty) {
+                      final matchesJobPosition = jobPosition.contains(_searchQuery);
+                      final matchesSkill = requiredSkills.any((skill) => skill.contains(_searchQuery));
+                      matchesSearch = matchesJobPosition || matchesSkill;
+                    }
+
+                    if (_isSkillsFilterEnabled && _isAIPoweredFilterEnabled) {
+                      return matchesSmartFilter && matchesAIFilter && matchesSearch;
+                    } else if (_isSkillsFilterEnabled) {
+                      return matchesSmartFilter && matchesSearch;
+                    } else if (_isAIPoweredFilterEnabled) {
+                      return matchesAIFilter && matchesSearch;
+                    }
+                    return matchesSearch;
                   }
-
-                  bool matchesSmartFilter = true;
-                  bool matchesAIFilter = true;
-
-                  if (_isSkillsFilterEnabled && _userSkills.isNotEmpty) {
-                    final userSkillsList = _userSkills.split(',').map((s) => s.trim().toLowerCase()).toList();
-                    matchesSmartFilter = requiredSkills.isNotEmpty && requiredSkills.every((skill) => userSkillsList.contains(skill));
-                  }
-
-                  if (_isAIPoweredFilterEnabled && _userSkills.isNotEmpty) {
-                    final userSkillsList = _userSkills.split(',').map((s) => s.trim().toLowerCase()).toList();
-                    final combinedSkills = [...userSkillsList, ..._relatedSkills.map((s) => s.toLowerCase())];
-                    matchesAIFilter = requiredSkills.isEmpty || requiredSkills.any((skill) => combinedSkills.contains(skill));
-                  }
-
-                  bool matchesSearch = true;
-                  if (_searchQuery.isNotEmpty) {
-                    final matchesJobPosition = jobPosition.contains(_searchQuery);
-                    final matchesSkill = requiredSkills.any((skill) => skill.contains(_searchQuery));
-                    matchesSearch = matchesJobPosition || matchesSkill;
-                  }
-
-                  if (_isSkillsFilterEnabled && _isAIPoweredFilterEnabled) {
-                    return matchesSmartFilter && matchesAIFilter && matchesSearch;
-                  } else if (_isSkillsFilterEnabled) {
-                    return matchesSmartFilter && matchesSearch;
-                  } else if (_isAIPoweredFilterEnabled) {
-                    return matchesAIFilter && matchesSearch;
-                  }
-                  return matchesSearch;
+                  return false;
                 }).toList();
+
+                if (jobs.isEmpty) {
+                  return Center(child: Text('No jobs available.', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])));
+                }
 
                 return Column(
                   children: jobs.map((job) {
                     final data = job.data() as Map<String, dynamic>;
-                    if ((data['jobPosition']?.trim().isEmpty ?? true) && (data['description']?.trim().isEmpty ?? true)) return const SizedBox.shrink();
+                    if ((data['jobPosition']?.trim().isEmpty ?? true) && (data['description']?.trim().isEmpty ?? true)) {
+                      return const SizedBox.shrink();
+                    }
                     final jobPosition = data['jobPosition'] ?? 'N/A';
                     final taskType = data['isShortTerm'] == true ? 'Short-term' : 'Long-term';
                     final startDate = data['startDate'] ?? '-';
                     final startTime = data['isShortTerm'] == true ? (data['startTime'] ?? '-') : '';
                     final salary = data['salary'] ?? 'Not specified';
+                    final applicants = data['applicants'] as List? ?? [];
+                    final requiredPeople = data['requiredPeople'] ?? 1;
 
                     return Card(
                       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -461,7 +481,10 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: ListTile(
                         contentPadding: const EdgeInsets.all(12),
-                        title: Text(jobPosition, style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87)),
+                        title: Text(
+                          jobPosition,
+                          style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87),
+                        ),
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -474,8 +497,12 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                 'Skill Required: ${data['requiredSkill'] is String ? (data['requiredSkill'] as String).split(',').join(', ') : (data['requiredSkill'] as List).join(', ')}',
                                 style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
                               ),
+                            Text('People Required: $requiredPeople', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
                           ],
                         ),
+                        trailing: applicants.contains(currentUser.uid)
+                            ? const Icon(Icons.check_circle, color: Colors.teal)
+                            : null,
                         onTap: () {
                           print('Navigating to JobDetailPage with jobId: ${job.id}');
                           Navigator.push(context, MaterialPageRoute(builder: (context) => JobDetailPage(data: data, jobId: job.id)))

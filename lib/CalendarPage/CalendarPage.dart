@@ -19,10 +19,9 @@ class CalendarPage extends StatefulWidget {
 
 class _CalendarPageState extends State<CalendarPage> {
   CalendarFormat _calendarFormat = CalendarFormat.month;
-  DateTime _focusedDay = DateTime.now().toLocal(); // Start with current date: 2025-07-21
+  DateTime _focusedDay = DateTime.now().toLocal(); // Start with current date: 2025-07-23
   DateTime? _selectedDay;
   Map<DateTime, List<Task>> _tasks = {};
-  final TextEditingController _taskController = TextEditingController();
   bool _isPomodoroRunning = false;
   int _pomodoroMinutes = 25;
   int _breakMinutes = 5;
@@ -41,27 +40,54 @@ class _CalendarPageState extends State<CalendarPage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       try {
-        final now = dateOnly(DateTime.now().toLocal()); // Current date: 2025-07-21
+        final now = dateOnly(DateTime.now().toLocal()); // Current date: 2025-07-23
         final snapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('tasks')
-            .where(FieldPath.documentId, isGreaterThanOrEqualTo: now.toIso8601String().split('T')[0])
+            .collection('jobs')
+            .where('acceptedApplicants', arrayContains: user.uid)
+            .where('startDate', isGreaterThanOrEqualTo: now.toIso8601String().split('T')[0])
             .get();
+
         setState(() {
-          _tasks = {
-            for (var doc in snapshot.docs)
-              dateOnly(DateTime.parse(doc.id)): // Use custom dateOnly
-              (doc.data()['tasks'] as List<dynamic>? ?? [])
-                  .map((t) => Task.fromMap(t as Map<String, dynamic>))
-                  .toList()
-          };
-          print('Loaded tasks for user ${user.uid}: $_tasks');
+          _tasks = {};
+          for (var doc in snapshot.docs) {
+            final data = doc.data();
+            final isShortTerm = data['isShortTerm'] == true;
+            final startDate = data['startDate'] != null
+                ? dateOnly(DateTime.parse(data['startDate']).toLocal())
+                : now;
+            final endDate = isShortTerm && data['endDate'] != null
+                ? dateOnly(DateTime.parse(data['endDate']).toLocal())
+                : startDate;
+
+            // Parse startTime and endTime
+            TimeOfDay startTime = _parseTimeOfDay(data['startTime'] ?? '12:00 AM');
+            TimeOfDay endTime = _parseTimeOfDay(data['endTime'] ?? '1:00 AM');
+
+            final task = Task(
+              title: data['jobPosition'] ?? 'Unnamed Job',
+              isTimeBlocked: false, // Default, can be toggled by user
+              startTime: startTime,
+              endTime: endTime,
+            );
+
+            // For long-term jobs, only add to startDate
+            if (!isShortTerm) {
+              _tasks.putIfAbsent(startDate, () => []).add(task);
+            } else {
+              // For short-term jobs, add to all dates from startDate to endDate
+              DateTime currentDate = startDate;
+              while (currentDate.isBefore(endDate) || currentDate.isAtSameMomentAs(endDate)) {
+                _tasks.putIfAbsent(currentDate, () => []).add(task);
+                currentDate = currentDate.add(const Duration(days: 1));
+              }
+            }
+          }
+          print('Loaded accepted jobs for user ${user.uid}: $_tasks');
         });
       } catch (e) {
-        print('Error loading tasks: $e');
+        print('Error loading jobs: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load tasks: $e')),
+          SnackBar(content: Text('Failed to load jobs: $e')),
         );
       }
     } else {
@@ -69,40 +95,34 @@ class _CalendarPageState extends State<CalendarPage> {
     }
   }
 
-  void _addTask() {
-    if (_taskController.text.isNotEmpty) {
-      final task = Task(
-        title: _taskController.text,
-        isTimeBlocked: false,
-        startTime: TimeOfDay.now(),
-        endTime: TimeOfDay.now().replacing(hour: TimeOfDay.now().hour + 1),
-      );
-      final taskDate = dateOnly(_selectedDay!);
-      if (taskDate.isBefore(dateOnly(DateTime.now().toLocal()))) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Cannot add tasks for past dates.')),
-        );
-        return;
-      }
-      setState(() {
-        _tasks.putIfAbsent(taskDate, () => []).add(task);
-      });
-      _saveTask(taskDate, task);
-      _taskController.clear();
-    }
-  }
+  TimeOfDay _parseTimeOfDay(String timeStr) {
+    try {
+      timeStr = timeStr.trim().toUpperCase().replaceAll(' ', '');
+      String period = 'AM';
+      String normalizedTime;
 
-  void _saveTask(DateTime date, Task task) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .collection('tasks')
-          .doc(date.toIso8601String().split('T')[0])
-          .set({
-        'tasks': FieldValue.arrayUnion([task.toMap()]),
-      }, SetOptions(merge: true));
+      if (timeStr.contains('PM')) {
+        period = 'PM';
+        normalizedTime = timeStr.replaceAll('PM', '');
+      } else if (timeStr.contains('AM')) {
+        normalizedTime = timeStr.replaceAll('AM', '');
+      } else {
+        normalizedTime = timeStr;
+      }
+
+      List<String> parts = normalizedTime.split(':');
+      if (parts.length != 2) throw FormatException('Invalid time format: $timeStr');
+
+      int hour = int.parse(parts[0]);
+      int minute = int.parse(parts[1]);
+
+      if (period == 'PM' && hour != 12) hour += 12;
+      else if (period == 'AM' && hour == 12) hour = 0;
+
+      return TimeOfDay(hour: hour, minute: minute);
+    } catch (e) {
+      print('Error parsing time: $e');
+      return TimeOfDay(hour: 0, minute: 0); // Fallback
     }
   }
 
@@ -137,16 +157,29 @@ class _CalendarPageState extends State<CalendarPage> {
     });
   }
 
+  Future<void> _saveTask(DateTime date, Task task) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('tasks')
+          .doc(date.toIso8601String().split('T')[0])
+          .set({
+        'tasks': FieldValue.arrayUnion([task.toMap()]),
+      }, SetOptions(merge: true));
+    }
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
-    _taskController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final now = dateOnly(DateTime.now().toLocal()); // 2025-07-21
+    final now = dateOnly(DateTime.now().toLocal());
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -160,7 +193,7 @@ class _CalendarPageState extends State<CalendarPage> {
         body: Column(
           children: [
             TableCalendar(
-              firstDay: now, // Restrict to today onward: 2025-07-21
+              firstDay: now, // Restrict to today onward: 2025-07-23
               lastDay: DateTime.utc(2030, 12, 31),
               focusedDay: _focusedDay,
               calendarFormat: _calendarFormat,
@@ -220,41 +253,9 @@ class _CalendarPageState extends State<CalendarPage> {
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _taskController,
-                      decoration: InputDecoration(
-                        hintText: 'Add task...',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.add),
-                          onPressed: _addTask,
-                        ),
-                      ),
-                      style: GoogleFonts.poppins(),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  ElevatedButton(
-                    onPressed: _isPomodoroRunning ? _stopPomodoro : _startPomodoro,
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
-                    child: Text(
-                      _isPomodoroRunning ? 'Stop Pomodoro' : 'Start Pomodoro',
-                      style: GoogleFonts.poppins(color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-            ),
             if (_isPomodoroRunning)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
                 child: Text(
                   '${(_remainingSeconds / 60).floor()}:${(_remainingSeconds % 60).toString().padLeft(2, '0')} ${_isBreak ? 'Break' : 'Work'}',
                   style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold),
@@ -264,7 +265,7 @@ class _CalendarPageState extends State<CalendarPage> {
               child: (_tasks[dateOnly(_selectedDay!)]?.isEmpty ?? true)
                   ? Center(
                 child: Text(
-                  'No tasks for this day',
+                  'No accepted jobs for this day',
                   style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey),
                 ),
               )
@@ -292,6 +293,21 @@ class _CalendarPageState extends State<CalendarPage> {
                     ),
                   );
                 },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: ElevatedButton(
+                onPressed: _isPomodoroRunning ? _stopPomodoro : _startPomodoro,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: Text(
+                  _isPomodoroRunning ? 'Stop Pomodoro' : 'Start Pomodoro',
+                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 16),
+                ),
               ),
             ),
           ],
