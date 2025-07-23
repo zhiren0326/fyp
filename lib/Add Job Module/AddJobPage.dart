@@ -20,6 +20,12 @@ class _AddJobPageState extends State<AddJobPage> {
   bool isShortTerm = true;
   bool isRecurring = false;
 
+  // Task Management additions
+  String selectedPriority = 'Medium';
+  List<String> taskDependencies = [];
+  List<String> availableTasks = [];
+  bool isTimeBlocked = false;
+
   final Map<String, TextEditingController> controllers = {
     'Job position*': TextEditingController(),
     'Type of workplace*': TextEditingController(),
@@ -35,34 +41,89 @@ class _AddJobPageState extends State<AddJobPage> {
     'End time*': TextEditingController(),
     'Recurring Tasks': TextEditingController(),
     'Required People*': TextEditingController(),
+    'Task Notes': TextEditingController(),
   };
 
   final Set<String> visibleInputs = {};
 
   final List<String> workplaceOptions = ["On-site", "Remote", "Hybrid"];
-  final List<String> employmentOptions = ["Full-time", "Part-time", "Contract", "Temporary", "Internship"];
+  final List<String> employmentOptions = [
+    "Full-time",
+    "Part-time",
+    "Contract",
+    "Temporary",
+    "Internship"
+  ];
+  final List<String> priorityLevels = ["Low", "Medium", "High", "Critical"];
 
   @override
   void initState() {
     super.initState();
+    _loadAvailableTasks();
     if (widget.initialData != null) {
-      controllers['Job position*']!.text = widget.initialData!['jobPosition'] ?? '';
-      controllers['Type of workplace*']!.text = widget.initialData!['workplaceType'] ?? '';
-      controllers['Job location*']!.text = widget.initialData!['location'] ?? '';
-      controllers['Employer/Company Name*']!.text = widget.initialData!['employerName'] ?? '';
-      controllers['Employment type*']!.text = widget.initialData!['employmentType'] ?? '';
-      controllers['Salary (RM)*']!.text = widget.initialData!['salary']?.toString() ?? '';
-      controllers['Description']!.text = widget.initialData!['description'] ?? '';
-      controllers['Required Skill*']!.text = widget.initialData!['requiredSkill']?.toString() ?? '';
-      controllers['Start date*']!.text = widget.initialData!['startDate'] ?? '';
-      controllers['Start time*']!.text = widget.initialData!['startTime'] ?? '';
-      controllers['End date*']!.text = widget.initialData!['endDate'] ?? '';
-      controllers['End time*']!.text = widget.initialData!['endTime'] ?? '';
-      controllers['Recurring Tasks']!.text = widget.initialData!['recurringTasks'] ?? '';
-      controllers['Required People*']!.text = widget.initialData!['requiredPeople']?.toString() ?? '1';
-      isShortTerm = widget.initialData!['isShortTerm'] ?? true;
-      isRecurring = widget.initialData!['recurring'] ?? false;
-      visibleInputs.addAll(controllers.keys.where((key) => controllers[key]!.text.isNotEmpty));
+      _populateFromInitialData();
+    }
+  }
+
+  void _populateFromInitialData() {
+    final data = widget.initialData!;
+    controllers['Job position*']!.text = data['jobPosition'] ?? '';
+    controllers['Type of workplace*']!.text = data['workplaceType'] ?? '';
+    controllers['Job location*']!.text = data['location'] ?? '';
+    controllers['Employer/Company Name*']!.text = data['employerName'] ?? '';
+    controllers['Employment type*']!.text = data['employmentType'] ?? '';
+    controllers['Salary (RM)*']!.text = data['salary']?.toString() ?? '';
+    controllers['Description']!.text = data['description'] ?? '';
+    controllers['Required Skill*']!.text =
+        data['requiredSkill']?.toString() ?? '';
+    controllers['Start date*']!.text = data['startDate'] ?? '';
+    controllers['Start time*']!.text = data['startTime'] ?? '';
+    controllers['End date*']!.text = data['endDate'] ?? '';
+    controllers['End time*']!.text = data['endTime'] ?? '';
+    controllers['Recurring Tasks']!.text = data['recurringTasks'] ?? '';
+    controllers['Required People*']!.text =
+        data['requiredPeople']?.toString() ?? '1';
+    controllers['Task Notes']!.text = data['taskNotes'] ?? '';
+
+    // Task management fields
+    isShortTerm = data['isShortTerm'] ?? true;
+    isRecurring = data['recurring'] ?? false;
+    selectedPriority = data['priority'] ?? 'Medium';
+    taskDependencies = List<String>.from(data['dependencies'] ?? []);
+    isTimeBlocked = data['isTimeBlocked'] ?? false;
+
+    visibleInputs.addAll(
+        controllers.keys.where((key) => controllers[key]!.text.isNotEmpty));
+  }
+
+  Future<void> _loadAvailableTasks() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final tasksSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('tasks')
+          .get();
+
+      List<String> tasks = [];
+      for (var doc in tasksSnapshot.docs) {
+        final data = doc.data();
+        if (data['tasks'] != null) {
+          for (var task in data['tasks']) {
+            if (task['title'] != null && !tasks.contains(task['title'])) {
+              tasks.add(task['title']);
+            }
+          }
+        }
+      }
+
+      setState(() {
+        availableTasks = tasks;
+      });
+    } catch (e) {
+      print('Error loading available tasks: $e');
     }
   }
 
@@ -76,66 +137,78 @@ class _AddJobPageState extends State<AddJobPage> {
     final currentUser = FirebaseAuth.instance.currentUser;
 
     if (currentUser == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('User not authenticated.'),
-          backgroundColor: Color(0xFF006D77),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      _showSnackBar('User not authenticated.');
       return;
     }
 
-    final startDateTime = _parseDateTime(controllers['Start date*']!.text, controllers['Start time*']!.text);
-    if (startDateTime != null && startDateTime.isBefore(DateTime.now())) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Start date and time cannot be in the past.'),
-          backgroundColor: Color(0xFF006D77),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
+    // Validate deadlines
+    if (!_validateDeadlines()) return;
 
     if (!_isFormValid()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please fill out all required fields with (*) sign.'),
-          backgroundColor: Color(0xFF006D77),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      _showSnackBar('Please fill out all required fields with (*) sign.');
+      return;
+    }
+
+    final startDateTime = _parseDateTime(
+        controllers['Start date*']!.text, controllers['Start time*']!.text);
+    if (startDateTime != null && startDateTime.isBefore(DateTime.now())) {
+      _showSnackBar('Start date and time cannot be in the past.');
       return;
     }
 
     if (isShortTerm) {
-      final endDateTime = _parseDateTime(controllers['End date*']!.text, controllers['End time*']!.text);
-      if (startDateTime == null || endDateTime == null || startDateTime.isAfter(endDateTime)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Start date and time must be earlier than end date and time.'),
-            backgroundColor: Color(0xFF006D77),
-            duration: Duration(seconds: 2),
-          ),
-        );
+      final endDateTime = _parseDateTime(
+          controllers['End date*']!.text, controllers['End time*']!.text);
+      if (startDateTime == null || endDateTime == null ||
+          startDateTime.isAfter(endDateTime)) {
+        _showSnackBar(
+            'Start date and time must be earlier than end date and time.');
         return;
       }
     }
 
-    final requiredPeople = int.tryParse(controllers['Required People*']!.text) ?? 1;
+    final requiredPeople = int.tryParse(
+        controllers['Required People*']!.text) ?? 1;
     if (requiredPeople < 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Required people must be at least 1.'),
-          backgroundColor: Color(0xFF006D77),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      _showSnackBar('Required people must be at least 1.');
       return;
     }
 
-    final jobData = <String, dynamic>{
+    final jobData = _buildJobData(currentUser.uid, requiredPeople);
+
+    try {
+      DocumentReference docRef;
+      if (widget.jobId != null) {
+        docRef =
+            FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
+        await docRef.update(jobData);
+        _showSnackBar('Job updated successfully!');
+
+        // Update task progress tracking
+        await _updateTaskProgress(docRef.id, true);
+      } else {
+        docRef =
+        await FirebaseFirestore.instance.collection('jobs').add(jobData);
+        await docRef.update({'jobId': docRef.id});
+        _showSnackBar('Job posted successfully!');
+
+        // Create task progress tracking
+        await _createTaskProgress(docRef.id);
+      }
+
+      // Log activity
+      await _logActivity(
+          widget.jobId != null ? 'Updated' : 'Created', docRef.id);
+
+      Navigator.pop(context, docRef.id);
+    } catch (e) {
+      _showSnackBar(
+          'Failed to ${widget.jobId != null ? 'update' : 'post'} job: $e');
+    }
+  }
+
+  Map<String, dynamic> _buildJobData(String userId, int requiredPeople) {
+    return {
       'jobPosition': controllers['Job position*']!.text,
       'workplaceType': controllers['Type of workplace*']!.text,
       'location': controllers['Job location*']!.text,
@@ -143,43 +216,172 @@ class _AddJobPageState extends State<AddJobPage> {
       'employmentType': controllers['Employment type*']!.text,
       'salary': int.tryParse(controllers['Salary (RM)*']!.text) ?? 0,
       'description': controllers['Description']!.text,
-      'requiredSkill': controllers['Required Skill*']!.text.split(',').map((s) => s.trim()).toList(),
+      'requiredSkill': controllers['Required Skill*']!.text.split(',').map((
+          s) => s.trim()).toList(),
       'startDate': controllers['Start date*']!.text,
       'startTime': isShortTerm ? controllers['Start time*']!.text : null,
       'endDate': isShortTerm ? controllers['End date*']!.text : null,
       'endTime': isShortTerm ? controllers['End time*']!.text : null,
       'recurring': isRecurring,
-      'recurringTasks': isRecurring ? controllers['Recurring Tasks']!.text : null,
+      'recurringTasks': isRecurring
+          ? controllers['Recurring Tasks']!.text
+          : null,
       'isShortTerm': isShortTerm,
       'requiredPeople': requiredPeople,
       'applicants': [],
       'acceptedApplicants': [],
       'isCompleted': false,
-      'postedAt': widget.jobId == null ? Timestamp.now() : FieldValue.serverTimestamp(),
-      'postedBy': currentUser.uid,
-    };
+      'postedAt': widget.jobId == null ? Timestamp.now() : FieldValue
+          .serverTimestamp(),
+      'postedBy': userId,
 
-    try {
-      DocumentReference docRef;
-      if (widget.jobId != null) {
-        docRef = FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
-        await docRef.update(jobData);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Job updated successfully!'), backgroundColor: Color(0xFF006D77)),
-        );
-      } else {
-        docRef = await FirebaseFirestore.instance.collection('jobs').add(jobData);
-        await docRef.update({'jobId': docRef.id}); // Add jobId to the document
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Job posted successfully!'), backgroundColor: Color(0xFF006D77)),
-        );
+      // Task Management additions
+      'priority': selectedPriority,
+      'dependencies': taskDependencies,
+      'isTimeBlocked': isTimeBlocked,
+      'taskNotes': controllers['Task Notes']!.text,
+      'progressPercentage': 0,
+      'milestones': [],
+      'estimatedDuration': _calculateEstimatedDuration(),
+      'actualDuration': null,
+      'deadlineReminders': _createDeadlineReminders(),
+    };
+  }
+
+  bool _validateDeadlines() {
+    if (controllers['Start date*']!.text.isEmpty) {
+      _showSnackBar('Start date is required.');
+      return false;
+    }
+
+    final startDate = DateTime.tryParse(controllers['Start date*']!.text);
+    if (startDate == null) {
+      _showSnackBar('Invalid start date format.');
+      return false;
+    }
+
+    if (isShortTerm && controllers['End date*']!.text.isNotEmpty) {
+      final endDate = DateTime.tryParse(controllers['End date*']!.text);
+      if (endDate == null) {
+        _showSnackBar('Invalid end date format.');
+        return false;
       }
-      // Navigate back with the jobId for potential refresh
-      Navigator.pop(context, docRef.id);
+      if (endDate.isBefore(startDate)) {
+        _showSnackBar('End date must be after start date.');
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  int _calculateEstimatedDuration() {
+    if (!isShortTerm) return 0;
+
+    final startDate = DateTime.tryParse(controllers['Start date*']!.text);
+    final endDate = DateTime.tryParse(controllers['End date*']!.text);
+
+    if (startDate != null && endDate != null) {
+      return endDate
+          .difference(startDate)
+          .inDays;
+    }
+    return 0;
+  }
+
+  List<Map<String, dynamic>> _createDeadlineReminders() {
+    List<Map<String, dynamic>> reminders = [];
+
+    if (controllers['Start date*']!.text.isNotEmpty) {
+      final startDate = DateTime.tryParse(controllers['Start date*']!.text);
+      if (startDate != null) {
+        // Add reminder 1 day before start
+        reminders.add({
+          'type': 'start_reminder',
+          'reminderDate': startDate.subtract(const Duration(days: 1))
+              .toIso8601String(),
+          'message': 'Task "${controllers['Job position*']!
+              .text}" starts tomorrow',
+          'sent': false,
+        });
+      }
+    }
+
+    if (isShortTerm && controllers['End date*']!.text.isNotEmpty) {
+      final endDate = DateTime.tryParse(controllers['End date*']!.text);
+      if (endDate != null) {
+        // Add reminder 1 day before deadline
+        reminders.add({
+          'type': 'deadline_reminder',
+          'reminderDate': endDate.subtract(const Duration(days: 1))
+              .toIso8601String(),
+          'message': 'Task "${controllers['Job position*']!
+              .text}" deadline is tomorrow',
+          'sent': false,
+        });
+      }
+    }
+
+    return reminders;
+  }
+
+  Future<void> _createTaskProgress(String jobId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .collection('taskProgress')
+          .doc(jobId)
+          .set({
+        'taskId': jobId,
+        'taskTitle': controllers['Job position*']!.text,
+        'currentProgress': 0,
+        'milestones': [],
+        'createdAt': Timestamp.now(),
+        'lastUpdated': Timestamp.now(),
+        'status': 'created',
+      });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to ${widget.jobId != null ? 'update' : 'post'} job: $e'), backgroundColor: Color(0xFF006D77)),
-      );
+      print('Error creating task progress: $e');
+    }
+  }
+
+  Future<void> _updateTaskProgress(String jobId, bool isUpdate) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .collection('taskProgress')
+          .doc(jobId)
+          .update({
+        'taskTitle': controllers['Job position*']!.text,
+        'lastUpdated': Timestamp.now(),
+        'status': 'updated',
+      });
+    } catch (e) {
+      print('Error updating task progress: $e');
+    }
+  }
+
+  Future<void> _logActivity(String action, String taskId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .collection('activityLog')
+          .add({
+        'action': action,
+        'taskId': taskId,
+        'taskTitle': controllers['Job position*']!.text,
+        'timestamp': Timestamp.now(),
+        'details': {
+          'priority': selectedPriority,
+          'isRecurring': isRecurring,
+          'isTimeBlocked': isTimeBlocked,
+        }
+      });
+    } catch (e) {
+      print('Error logging activity: $e');
     }
   }
 
@@ -196,7 +398,8 @@ class _AddJobPageState extends State<AddJobPage> {
       final month = int.parse(dateParts[1]);
       final day = int.parse(dateParts[2]);
 
-      final period = timeStr.contains('PM') && hour != 12 ? 12 : (timeStr.contains('AM') && hour == 12 ? -12 : 0);
+      final period = timeStr.contains('PM') && hour != 12 ? 12 : (timeStr
+          .contains('AM') && hour == 12 ? -12 : 0);
       final adjustedHour = (hour + period) % 24;
 
       return DateTime(year, month, day, adjustedHour, minute);
@@ -204,6 +407,178 @@ class _AddJobPageState extends State<AddJobPage> {
       print('Error parsing date-time: $e');
       return null;
     }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFF006D77),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Widget _buildPrioritySelector() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Task Priority', style: GoogleFonts.poppins(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: const Color(0xFF006D77))),
+          const SizedBox(height: 8),
+          Row(
+            children: priorityLevels.map((priority) {
+              final isSelected = selectedPriority == priority;
+              Color priorityColor = _getPriorityColor(priority);
+
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() => selectedPriority = priority),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected ? priorityColor : Colors.grey[200],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: priorityColor,
+                          width: isSelected ? 2 : 1),
+                    ),
+                    child: Text(
+                      priority,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(
+                        color: isSelected ? Colors.white : priorityColor,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight
+                            .normal,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _getPriorityColor(String priority) {
+    switch (priority) {
+      case 'Low':
+        return Colors.green;
+      case 'Medium':
+        return Colors.orange;
+      case 'High':
+        return Colors.red;
+      case 'Critical':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Widget _buildDependenciesSelector() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Task Dependencies', style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                  color: const Color(0xFF006D77))),
+              IconButton(
+                icon: const Icon(Icons.add, color: Color(0xFF006D77)),
+                onPressed: _showDependencySelector,
+              ),
+            ],
+          ),
+          if (taskDependencies.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: taskDependencies.map((dependency) {
+                return Chip(
+                  label: Text(
+                      dependency, style: GoogleFonts.poppins(fontSize: 12)),
+                  deleteIcon: const Icon(Icons.close, size: 16),
+                  onDeleted: () =>
+                      setState(() =>
+                          taskDependencies.remove(dependency)),
+                  backgroundColor: const Color(0xFFB2DFDB),
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showDependencySelector() {
+    showDialog(
+      context: context,
+      builder: (context) =>
+          AlertDialog(
+            title: const Text('Select Dependencies'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: availableTasks.map((task) {
+                  final isSelected = taskDependencies.contains(task);
+                  return CheckboxListTile(
+                    title: Text(task),
+                    value: isSelected,
+                    onChanged: (bool? value) {
+                      setState(() {
+                        if (value == true && !taskDependencies.contains(task)) {
+                          taskDependencies.add(task);
+                        } else if (value == false) {
+                          taskDependencies.remove(task);
+                        }
+                      });
+                      Navigator.pop(context);
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+    );
   }
 
   Widget _buildDropdownField(String label, List<String> options) {
@@ -214,22 +589,33 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77))),
+          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: const Color(0xFF006D77))),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
             value: controller.text.isNotEmpty ? controller.text : null,
-            items: options.map((e) => DropdownMenuItem(value: e, child: Text(e, style: GoogleFonts.poppins(color: const Color(0xFF006D77))))).toList(),
+            items: options.map((e) => DropdownMenuItem(value: e,
+                child: Text(e, style: GoogleFonts.poppins(
+                    color: const Color(0xFF006D77))))).toList(),
             onChanged: (val) => setState(() => controller.text = val ?? ''),
             decoration: InputDecoration(
               filled: true,
               fillColor: const Color(0xFFF9F9F9),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
             ),
             dropdownColor: Colors.white,
             icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF006D77)),
@@ -247,12 +633,18 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77))),
+          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: const Color(0xFF006D77))),
           const SizedBox(height: 8),
           TextField(
             controller: controller,
@@ -262,11 +654,13 @@ class _AddJobPageState extends State<AddJobPage> {
               final result = isDate
                   ? await showDatePicker(
                 context: context,
-                initialDate: controller.text.isNotEmpty ? DateTime.parse(controller.text) : now,
+                initialDate: controller.text.isNotEmpty ? DateTime.parse(
+                    controller.text) : now,
                 firstDate: now,
                 lastDate: DateTime(2100),
               )
-                  : await showTimePicker(context: context, initialTime: TimeOfDay.now());
+                  : await showTimePicker(
+                  context: context, initialTime: TimeOfDay.now());
               if (result != null) {
                 final formatted = isDate
                     ? (result as DateTime).toLocal().toString().split(" ")[0]
@@ -278,9 +672,13 @@ class _AddJobPageState extends State<AddJobPage> {
               hintText: 'Pick $label',
               filled: true,
               fillColor: const Color(0xFFF9F9F9),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              suffixIcon: const Icon(Icons.calendar_today, color: Color(0xFF006D77)),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
+              suffixIcon: const Icon(
+                  Icons.calendar_today, color: Color(0xFF006D77)),
             ),
           ),
         ],
@@ -301,7 +699,11 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -311,15 +713,19 @@ class _AddJobPageState extends State<AddJobPage> {
             children: [
               Text(
                 label,
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77)),
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: const Color(0xFF006D77)),
               ),
               IconButton(
-                icon: Icon(hasText ? Icons.edit : Icons.add, color: const Color(0xFF006D77)),
+                icon: Icon(hasText ? Icons.edit : Icons.add,
+                    color: const Color(0xFF006D77)),
                 onPressed: () async {
                   if (label == 'Job location*') {
                     final selected = await Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const LocationPickerPage()),
+                      MaterialPageRoute(
+                          builder: (_) => const LocationPickerPage()),
                     );
                     if (selected != null && selected is String) {
                       setState(() {
@@ -338,16 +744,24 @@ class _AddJobPageState extends State<AddJobPage> {
             const SizedBox(height: 8),
             TextField(
               controller: controller,
-              keyboardType: isSalaryField || isRequiredPeopleField ? TextInputType.number : TextInputType.text,
-              inputFormatters: isSalaryField || isRequiredPeopleField ? [FilteringTextInputFormatter.digitsOnly] : null,
-              maxLines: label == 'Description' || label == 'Recurring Tasks' ? 4 : 1,
+              keyboardType: isSalaryField || isRequiredPeopleField
+                  ? TextInputType.number
+                  : TextInputType.text,
+              inputFormatters: isSalaryField || isRequiredPeopleField ? [
+                FilteringTextInputFormatter.digitsOnly
+              ] : null,
+              maxLines: label == 'Description' || label == 'Recurring Tasks' ||
+                  label == 'Task Notes' ? 4 : 1,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: 'Enter $label',
                 filled: true,
                 fillColor: const Color(0xFFF9F9F9),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 10),
               ),
             ),
           ],
@@ -359,10 +773,13 @@ class _AddJobPageState extends State<AddJobPage> {
   bool _isFormValid() {
     for (var entry in controllers.entries) {
       final isRequired = entry.key.endsWith('*');
-      final isTimeField = entry.key == 'Start time*' || entry.key == 'End time*';
+      final isTimeField = entry.key == 'Start time*' ||
+          entry.key == 'End time*';
       if (!isRequired) continue;
       if (!isShortTerm && (entry.key == 'End date*' || isTimeField)) continue;
-      if (entry.value.text.trim().isEmpty) {
+      if (entry.value.text
+          .trim()
+          .isEmpty) {
         print('Missing required field: ${entry.key}');
         return false;
       }
@@ -370,20 +787,29 @@ class _AddJobPageState extends State<AddJobPage> {
     return true;
   }
 
-  Widget _buildSwitchRow({required String label, required bool value, required Function(bool) onChanged}) {
+  Widget _buildSwitchRow(
+      {required String label, required bool value, required Function(bool) onChanged}) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3))
+        ],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500, color: const Color(0xFF006D77))),
-          Switch(value: value, onChanged: onChanged, activeColor: const Color(0xFF006D77)),
+          Text(label, style: GoogleFonts.poppins(fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: const Color(0xFF006D77))),
+          Switch(value: value,
+              onChanged: onChanged,
+              activeColor: const Color(0xFF006D77)),
         ],
       ),
     );
@@ -410,14 +836,18 @@ class _AddJobPageState extends State<AddJobPage> {
           ),
           title: Text(
             widget.jobId == null ? 'Add a Job' : 'Edit Job',
-            style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w600, color: const Color(0xFF006D77)),
+            style: GoogleFonts.poppins(fontSize: 24,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF006D77)),
           ),
           actions: [
             TextButton(
               onPressed: _submitJob,
               child: Text(
                 widget.jobId == null ? 'Post' : 'Save',
-                style: GoogleFonts.poppins(color: const Color(0xFF006D77), fontWeight: FontWeight.bold, fontSize: 16),
+                style: GoogleFonts.poppins(color: const Color(0xFF006D77),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16),
               ),
             ),
           ],
@@ -429,11 +859,15 @@ class _AddJobPageState extends State<AddJobPage> {
             children: [
               Text(
                 widget.jobId == null ? 'Add a new job' : 'Edit your job',
-                style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.w600, color: const Color(0xFF006D77)),
+                style: GoogleFonts.poppins(fontSize: 22,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF006D77)),
               ),
               const SizedBox(height: 16),
               _buildSwitchRow(
-                label: isShortTerm ? 'Job Type: Short-term' : 'Job Type: Long-term',
+                label: isShortTerm
+                    ? 'Job Type: Short-term'
+                    : 'Job Type: Long-term',
                 value: isShortTerm,
                 onChanged: (val) => setState(() => isShortTerm = val),
               ),
@@ -441,6 +875,11 @@ class _AddJobPageState extends State<AddJobPage> {
                 label: 'Recurring task',
                 value: isRecurring,
                 onChanged: (val) => setState(() => isRecurring = val),
+              ),
+              _buildSwitchRow(
+                label: 'Time Blocking',
+                value: isTimeBlocked,
+                onChanged: (val) => setState(() => isTimeBlocked = val),
               ),
               const SizedBox(height: 16),
               Expanded(
@@ -454,11 +893,14 @@ class _AddJobPageState extends State<AddJobPage> {
                     _buildFieldTile('Salary (RM)*'),
                     _buildFieldTile('Required Skill*'),
                     _buildFieldTile('Description'),
+                    _buildPrioritySelector(),
+                    _buildDependenciesSelector(),
                     _buildDateTimePicker('Start date*', true),
                     if (isShortTerm) _buildDateTimePicker('Start time*', false),
                     if (isShortTerm) _buildDateTimePicker('End date*', true),
                     if (isShortTerm) _buildDateTimePicker('End time*', false),
                     if (isRecurring) _buildFieldTile('Recurring Tasks'),
+                    _buildFieldTile('Task Notes'),
                     _buildFieldTile('Required People*'),
                   ],
                 ),
