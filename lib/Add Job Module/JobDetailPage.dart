@@ -5,7 +5,7 @@ import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import 'package:fyp/Add%20Job%20Module/EditingJobsPage.dart';
 import 'package:fyp/Login%20Signup/Screen/home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
-
+import 'package:fyp/module/ChatMessage.dart';
 
 // Custom dateOnly function
 DateTime dateOnly(DateTime dateTime) {
@@ -25,11 +25,13 @@ class JobDetailPage extends StatefulWidget {
 class _JobDetailPageState extends State<JobDetailPage> {
   bool _isLoading = false;
   bool _hasApplied = false;
+  bool _isOwner = false;
 
   @override
   void initState() {
     super.initState();
     _checkApplicationStatus();
+    _checkOwnership();
   }
 
   Future<void> _checkApplicationStatus() async {
@@ -41,6 +43,14 @@ class _JobDetailPageState extends State<JobDetailPage> {
         _hasApplied = (data['applicants'] as List?)?.contains(user.uid) ?? false;
       });
     }
+  }
+
+  Future<void> _checkOwnership() async {
+    final user = FirebaseAuth.instance.currentUser!;
+    print('Checking ownership: postedBy=${widget.data['postedBy']}, userUid=${user.uid}');
+    setState(() {
+      _isOwner = widget.data['postedBy'] == user.uid;
+    });
   }
 
   Future<bool> _checkProfileCompleteness() async {
@@ -142,6 +152,141 @@ class _JobDetailPageState extends State<JobDetailPage> {
     }
   }
 
+  Future<void> _contactEmployer() async {
+    final user = FirebaseAuth.instance.currentUser!;
+    final ownerUid = widget.data['postedBy'];
+
+    print('Contact Employer: ownerUid=$ownerUid, userUid=${user.uid}');
+
+    if (ownerUid == null || ownerUid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: Employer UID not found in job data.', style: GoogleFonts.poppins()),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    if (ownerUid == user.uid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('You cannot chat with yourself as the employer.', style: GoogleFonts.poppins()),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Fetch current user's custom ID
+      final currentUserCustomIdDoc = await FirebaseFirestore.instance
+          .collection('custom_ids')
+          .doc(user.uid)
+          .get();
+      if (!currentUserCustomIdDoc.exists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: Your custom ID not found.', style: GoogleFonts.poppins()),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+      final currentUserCustomId = currentUserCustomIdDoc['customId'];
+      print('Current user custom ID: $currentUserCustomId');
+
+      // Fetch owner's custom ID and profile details
+      final ownerCustomIdDoc = await FirebaseFirestore.instance
+          .collection('custom_ids')
+          .doc(ownerUid)
+          .get();
+      if (!ownerCustomIdDoc.exists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: Employer ID not found.', style: GoogleFonts.poppins()),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+      final ownerCustomId = ownerCustomIdDoc['customId'];
+      print('Owner custom ID: $ownerCustomId');
+
+      final ownerProfileDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(ownerUid)
+          .collection('profiledetails')
+          .doc('profile')
+          .get();
+      if (!ownerProfileDoc.exists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: Employer profile not found.', style: GoogleFonts.poppins()),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+
+      final ownerName = ownerProfileDoc['name'] ?? 'Employer';
+      final ownerPhotoURL = ownerProfileDoc['photoURL'] ?? 'assets/default_avatar.png';
+      print('Owner profile: name=$ownerName, photoURL=$ownerPhotoURL');
+
+      // Add chat to user's chat list
+      final chatDocRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('chats')
+          .doc('chat_list');
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final doc = await transaction.get(chatDocRef);
+        List<Map<String, dynamic>> updatedChatList = List<Map<String, dynamic>>.from(doc.data()?['users'] ?? []);
+        final chatIndex = updatedChatList.indexWhere((chat) => chat['customId'] == ownerCustomId);
+        final chatData = {
+          'customId': ownerCustomId,
+          'name': ownerName,
+          'photoURL': ownerPhotoURL,
+          'isGroup': false,
+        };
+        if (chatIndex == -1) {
+          updatedChatList.add(chatData);
+        } else {
+          updatedChatList[chatIndex] = chatData;
+        }
+        transaction.set(chatDocRef, {'users': updatedChatList}, SetOptions(merge: true));
+      });
+      print('Chat added to user chat list');
+
+      // Navigate to ChatMessage page
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChatMessage(
+            currentUserCustomId: currentUserCustomId,
+            selectedCustomId: ownerCustomId,
+            selectedUserName: ownerName,
+            selectedUserPhotoURL: ownerPhotoURL,
+          ),
+        ),
+      );
+    } catch (e) {
+      print('Error in _contactEmployer: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to start chat with employer: $e', style: GoogleFonts.poppins()),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   TimeOfDay _parseTimeOfDay(String timeStr) {
     timeStr = timeStr.trim().toUpperCase().replaceAll(' ', '');
     String period = 'AM';
@@ -175,7 +320,8 @@ class _JobDetailPageState extends State<JobDetailPage> {
     final requiredSkill = widget.data['requiredSkill'] ?? '-';
     final startTime = widget.data['isShortTerm'] == true && widget.data['startTime'] != null ? widget.data['startTime'] : '-';
     final endTime = widget.data['isShortTerm'] == true && widget.data['endTime'] != null ? widget.data['endTime'] : '-';
-    final isOwner = widget.data['postedBy'] == FirebaseAuth.instance.currentUser!.uid;
+
+    print('Building UI: isOwner=$_isOwner');
 
     return Scaffold(
       appBar: AppBar(
@@ -236,21 +382,40 @@ class _JobDetailPageState extends State<JobDetailPage> {
             ),
             const SizedBox(height: 20),
             Center(
-              child: isOwner
-                  ? const Text('You cannot apply to your own job', style: TextStyle(fontSize: 16, color: Colors.grey))
-                  : _isLoading
-                  ? const CircularProgressIndicator(color: Colors.teal)
-                  : ElevatedButton(
-                onPressed: _hasApplied ? null : _acceptJob,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _hasApplied ? Colors.grey : Colors.teal,
-                  padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                child: Text(
-                  _hasApplied ? 'Already Applied' : 'Apply Now',
-                  style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
-                ),
+              child: Column(
+                children: [
+                  if (_isOwner)
+                    const Text('You cannot apply to your own job', style: TextStyle(fontSize: 16, color: Colors.grey))
+                  else
+                    _isLoading
+                        ? const CircularProgressIndicator(color: Colors.teal)
+                        : ElevatedButton(
+                      onPressed: _hasApplied ? null : _acceptJob,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _hasApplied ? Colors.grey : Colors.teal,
+                        padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: Text(
+                        _hasApplied ? 'Already Applied' : 'Apply Now',
+                        style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  if (!_isOwner)
+                    ElevatedButton(
+                      onPressed: _contactEmployer,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.teal[800],
+                        padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: Text(
+                        'Contact Employer',
+                        style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
