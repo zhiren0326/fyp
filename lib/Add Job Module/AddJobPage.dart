@@ -892,7 +892,7 @@ class _AddJobPageState extends State<AddJobPage> {
                     _buildDropdownField('Employment type*', employmentOptions),
                     _buildFieldTile('Salary (RM)*'),
                     _buildFieldTile('Required Skill*'),
-                    _buildFieldTile('Description'),
+                    _buildFieldTile('Description (Optional)'),
                     _buildPrioritySelector(),
                     _buildDependenciesSelector(),
                     _buildDateTimePicker('Start date*', true),

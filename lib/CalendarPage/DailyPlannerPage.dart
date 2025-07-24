@@ -1,241 +1,643 @@
-/*
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:flutter_draggable_gridview/flutter_draggable_gridview.dart';
-import 'package:fyp/main.dart' show flutterLocalNotificationsPlugin;
-import 'package:table_calendar/table_calendar.dart';
-import 'package:timezone/timezone.dart' as tz;
+import 'package:intl/intl.dart';
 
-DateTime dateOnly(DateTime dateTime) {
-  return DateTime(dateTime.year, dateTime.month, dateTime.day);
-}
-
-Future<void> scheduleNotification(String title, DateTime scheduledTime) async {
-  const AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
-    'time_block_channel',
-    'Time Block Reminders',
-    importance: Importance.max,
-    priority: Priority.high,
-  );
-  const NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
-  await flutterLocalNotificationsPlugin.zonedSchedule(
-    title.hashCode,
-    '$title starts now!',
-    'Time to focus on your task.',
-    tz.TZDateTime.from(scheduledTime, tz.local),
-    platformChannelSpecifics,
-    androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-    matchDateTimeComponents: DateTimeComponents.time,
-  );
-}
+import '../models/task.dart';
 
 class DailyPlannerPage extends StatefulWidget {
-  final DateTime initialDate;
+  final DateTime selectedDate;
 
-  const DailyPlannerPage({super.key, required this.initialDate});
+  const DailyPlannerPage({super.key, required this.selectedDate});
 
   @override
   State<DailyPlannerPage> createState() => _DailyPlannerPageState();
 }
 
 class _DailyPlannerPageState extends State<DailyPlannerPage> {
-  late DateTime _selectedDay;
-  Map<DateTime, List<Task>> _tasks = {};
-  List<TimeSlot> _timeSlots = [];
+  List<Task> _tasks = [];
+  List<Task> _completedTasks = [];
+  bool _isLoading = true;
+  String _dailyGoal = '';
+  int _totalEstimatedTime = 0;
+  int _completedTime = 0;
 
   @override
   void initState() {
     super.initState();
-    _selectedDay = dateOnly(widget.initialDate);
-    _initializeTimeSlots();
-    _loadTasks();
+    _loadDailyData();
   }
 
-  void _initializeTimeSlots() {
-    _timeSlots = List.generate(9, (index) {
-      final hour = 9 + index; // 9 AM to 5 PM
-      return TimeSlot(
-        startTime: TimeOfDay(hour: hour, minute: 0),
-        endTime: TimeOfDay(hour: hour + 1, minute: 0),
-      );
-    });
-  }
+  Future<void> _loadDailyData() async {
+    setState(() => _isLoading = true);
 
-  void _loadTasks() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       try {
-        final now = dateOnly(DateTime.now().toLocal());
-        final jobSnapshot = await FirebaseFirestore.instance
-            .collection('jobs')
-            .where('acceptedApplicants', arrayContains: user.uid)
-            .where('startDate', isGreaterThanOrEqualTo: now.toIso8601String().split('T')[0])
-            .limit(50)
-            .get();
+        final dateStr = DateFormat('yyyy-MM-dd').format(widget.selectedDate);
 
-        final taskSnapshot = await FirebaseFirestore.instance
+        // Load tasks
+        final taskDoc = await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
             .collection('tasks')
-            .where('date', isEqualTo: dateOnly(_selectedDay).toIso8601String().split('T')[0])
-            .limit(50)
+            .doc(dateStr)
+            .get();
+
+        // Load daily goal
+        final plannerDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('dailyPlanner')
+            .doc(dateStr)
             .get();
 
         setState(() {
-          _tasks = {};
-          for (var doc in jobSnapshot.docs) {
-            final data = doc.data();
-            final startDate = data['startDate'] != null
-                ? dateOnly(DateTime.parse(data['startDate']).toLocal())
-                : now;
-            final isShortTerm = data['isShortTerm'] == true;
-            final endDate = isShortTerm && data['endDate'] != null
-                ? dateOnly(DateTime.parse(data['endDate']).toLocal())
-                : startDate;
-
-            final task = Task(
-              title: data['jobPosition'] ?? 'Unnamed Job',
-              isTimeBlocked: false,
-              startTime: _parseTimeOfDay(data['startTime'] ?? '12:00 AM'),
-              endTime: _parseTimeOfDay(data['endTime'] ?? '1:00 AM'),
-              jobId: doc.id,
-            );
-
-            if (!isShortTerm && isSameDay(startDate, _selectedDay)) {
-              _tasks.putIfAbsent(startDate, () => []).add(task);
-            } else if (isShortTerm) {
-              DateTime currentDate = startDate;
-              while (currentDate.isBefore(endDate) || currentDate.isAtSameMomentAs(endDate)) {
-                if (isSameDay(currentDate, _selectedDay) && !currentDate.isBefore(now)) {
-                  _tasks.putIfAbsent(currentDate, () => []).add(task);
-                }
-                currentDate = currentDate.add(const Duration(days: 1));
-              }
-            }
-          }
-
-          for (var doc in taskSnapshot.docs) {
-            final data = doc.data();
-            final date = dateOnly(DateTime.parse(data['date']));
+          if (taskDoc.exists) {
+            final data = taskDoc.data()!;
             final tasksData = data['tasks'] as List<dynamic>? ?? [];
-            for (var taskData in tasksData) {
-              final task = Task.fromMap(taskData);
-              _tasks.putIfAbsent(date, () => []).add(task);
-              if (task.isTimeBlocked && date.isAtSameMomentAs(dateOnly(_selectedDay))) {
-                final scheduledTime = DateTime(
-                  date.year,
-                  date.month,
-                  date.day,
-                  task.startTime.hour,
-                  task.startTime.minute,
-                );
-                if (scheduledTime.isAfter(DateTime.now())) {
-                  scheduleNotification(task.title, scheduledTime);
-                }
-              }
-            }
+            _tasks = tasksData
+                .map((taskData) => Task.fromMap(taskData))
+                .where((task) => !task.isCompleted)
+                .toList();
+            _completedTasks = tasksData
+                .map((taskData) => Task.fromMap(taskData))
+                .where((task) => task.isCompleted)
+                .toList();
           }
 
-          print('Loaded ${jobSnapshot.docs.length} jobs and ${taskSnapshot.docs.length} tasks for user ${user.uid} on ${_selectedDay.toIso8601String()}');
+          if (plannerDoc.exists) {
+            _dailyGoal = plannerDoc.data()?['dailyGoal'] ?? '';
+          }
+
+          _calculateTotalTime();
+          _isLoading = false;
         });
       } catch (e) {
-        print('Error loading tasks: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load tasks: $e')),
-        );
+        print('Error loading daily data: $e');
+        setState(() => _isLoading = false);
       }
     }
   }
 
-  TimeOfDay _parseTimeOfDay(String timeStr) {
-    try {
-      timeStr = timeStr.trim().toUpperCase().replaceAll(' ', '');
-      String period = 'AM';
-      String normalizedTime;
-
-      if (timeStr.contains('PM')) {
-        period = 'PM';
-        normalizedTime = timeStr.replaceAll('PM', '');
-      } else if (timeStr.contains('AM')) {
-        normalizedTime = timeStr.replaceAll('AM', '');
-      } else {
-        normalizedTime = timeStr;
-      }
-
-      List<String> parts = normalizedTime.split(':');
-      if (parts.length != 2) throw FormatException('Invalid time format: $timeStr');
-
-      int hour = int.parse(parts[0]);
-      int minute = int.parse(parts[1]);
-
-      if (period == 'PM' && hour != 12) hour += 12;
-      else if (period == 'AM' && hour == 12) hour = 0;
-
-      return TimeOfDay(hour: hour, minute: minute);
-    } catch (e) {
-      print('Error parsing time: $timeStr, $e');
-      return TimeOfDay(hour: 0, minute: 0);
-    }
+  void _calculateTotalTime() {
+    _totalEstimatedTime = _tasks.fold(0, (sum, task) => sum + task.estimatedDuration);
+    _completedTime = _completedTasks.fold(0, (sum, task) => sum + task.estimatedDuration);
   }
 
-  Future<void> _saveTask(DateTime date, Task task) async {
+  Future<void> _saveDailyData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       try {
+        final dateStr = DateFormat('yyyy-MM-dd').format(widget.selectedDate);
+
+        // Save tasks
+        final allTasks = [..._tasks, ..._completedTasks];
         await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
             .collection('tasks')
-            .doc(date.toIso8601String().split('T')[0])
+            .doc(dateStr)
             .set({
-          'date': date.toIso8601String().split('T')[0],
-          'tasks': FieldValue.arrayUnion([task.toMap()]),
-        }, SetOptions(merge: true));
-        print('Task saved for date: ${date.toIso8601String().split('T')[0]}');
+          'date': dateStr,
+          'tasks': allTasks.map((task) => task.toMap()).toList(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
 
-        if (task.isTimeBlocked) {
-          final scheduledTime = DateTime(
-            date.year,
-            date.month,
-            date.day,
-            task.startTime.hour,
-            task.startTime.minute,
-          );
-          if (scheduledTime.isAfter(DateTime.now())) {
-            await scheduleNotification(task.title, scheduledTime);
-          }
-        }
+        // Save daily goal
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('dailyPlanner')
+            .doc(dateStr)
+            .set({
+          'dailyGoal': _dailyGoal,
+          'date': dateStr,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
       } catch (e) {
-        print('Error saving task: $e');
+        print('Error saving daily data: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save task: $e')),
+          SnackBar(content: Text('Failed to save: $e')),
         );
       }
     }
   }
 
-  bool _checkForOverlap(Task newTask, DateTime date, List<Task> existingTasks) {
-    for (var task in existingTasks) {
-      if (task.isTimeBlocked && task != newTask) {
-        final existingStart = DateTime(date.year, date.month, date.day, task.startTime.hour, task.startTime.minute);
-        final existingEnd = DateTime(date.year, date.month, date.day, task.endTime.hour, task.endTime.minute);
-        final newStart = DateTime(date.year, date.month, date.day, newTask.startTime.hour, newTask.startTime.minute);
-        final newEnd = DateTime(date.year, date.month, date.day, newTask.endTime.hour, newTask.endTime.minute);
+  void _showAddTaskDialog() {
+    final titleController = TextEditingController();
+    final descriptionController = TextEditingController();
+    final categoryController = TextEditingController(text: 'General');
+    TaskPriority selectedPriority = TaskPriority.medium;
+    int estimatedDuration = 30;
 
-        if (newStart.isBefore(existingEnd) && newEnd.isAfter(existingStart)) {
-          return true;
-        }
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Add New Task', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: InputDecoration(
+                    labelText: 'Task Title',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descriptionController,
+                  decoration: InputDecoration(
+                    labelText: 'Description (optional)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: categoryController,
+                  decoration: InputDecoration(
+                    labelText: 'Category',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Priority', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                          DropdownButton<TaskPriority>(
+                            value: selectedPriority,
+                            isExpanded: true,
+                            items: TaskPriority.values.map((priority) {
+                              Color color = priority == TaskPriority.high ? Colors.red :
+                              priority == TaskPriority.medium ? Colors.orange : Colors.green;
+                              return DropdownMenuItem(
+                                value: priority,
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 12,
+                                      height: 12,
+                                      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(priority.name.toUpperCase()),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (value) => setDialogState(() => selectedPriority = value!),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Duration (min)', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                          DropdownButton<int>(
+                            value: estimatedDuration,
+                            isExpanded: true,
+                            items: [15, 30, 45, 60, 90, 120, 180].map((duration) {
+                              return DropdownMenuItem(
+                                value: duration,
+                                child: Text('$duration min'),
+                              );
+                            }).toList(),
+                            onChanged: (value) => setDialogState(() => estimatedDuration = value!),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (titleController.text.trim().isNotEmpty) {
+                  final newTask = Task(
+                    id: DateTime.now().millisecondsSinceEpoch.toString(),
+                    title: titleController.text.trim(),
+                    description: descriptionController.text.trim(),
+                    category: categoryController.text.trim(),
+                    priority: selectedPriority,
+                    estimatedDuration: estimatedDuration,
+                    isCompleted: false,
+                    startTime: const TimeOfDay(hour: 9, minute: 0),
+                    endTime: const TimeOfDay(hour: 10, minute: 0),
+                  );
+
+                  setState(() {
+                    _tasks.add(newTask);
+                    _calculateTotalTime();
+                  });
+
+                  _saveDailyData();
+                  Navigator.pop(context);
+                }
+              },
+              child: const Text('Add Task'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _toggleTaskCompletion(Task task) {
+    setState(() {
+      if (task.isCompleted) {
+        _completedTasks.remove(task);
+        _tasks.add(task.copyWith(isCompleted: false));
+      } else {
+        _tasks.remove(task);
+        _completedTasks.add(task.copyWith(isCompleted: true));
       }
-    }
-    return false;
+      _calculateTotalTime();
+    });
+    _saveDailyData();
+  }
+
+  void _deleteTask(Task task) {
+    setState(() {
+      _tasks.remove(task);
+      _completedTasks.remove(task);
+      _calculateTotalTime();
+    });
+    _saveDailyData();
+  }
+
+  void _editTask(Task task) {
+    final titleController = TextEditingController(text: task.title);
+    final descriptionController = TextEditingController(text: task.description);
+    final categoryController = TextEditingController(text: task.category);
+    TaskPriority selectedPriority = task.priority;
+    int estimatedDuration = task.estimatedDuration;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Edit Task', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: InputDecoration(
+                    labelText: 'Task Title',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descriptionController,
+                  decoration: InputDecoration(
+                    labelText: 'Description',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: categoryController,
+                  decoration: InputDecoration(
+                    labelText: 'Category',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Priority', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                          DropdownButton<TaskPriority>(
+                            value: selectedPriority,
+                            isExpanded: true,
+                            items: TaskPriority.values.map((priority) {
+                              Color color = priority == TaskPriority.high ? Colors.red :
+                              priority == TaskPriority.medium ? Colors.orange : Colors.green;
+                              return DropdownMenuItem(
+                                value: priority,
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 12,
+                                      height: 12,
+                                      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(priority.name.toUpperCase()),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (value) => setDialogState(() => selectedPriority = value!),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Duration (min)', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                          DropdownButton<int>(
+                            value: estimatedDuration,
+                            isExpanded: true,
+                            items: [15, 30, 45, 60, 90, 120, 180].map((duration) {
+                              return DropdownMenuItem(
+                                value: duration,
+                                child: Text('$duration min'),
+                              );
+                            }).toList(),
+                            onChanged: (value) => setDialogState(() => estimatedDuration = value!),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (titleController.text.trim().isNotEmpty) {
+                  final updatedTask = task.copyWith(
+                    title: titleController.text.trim(),
+                    description: descriptionController.text.trim(),
+                    category: categoryController.text.trim(),
+                    priority: selectedPriority,
+                    estimatedDuration: estimatedDuration,
+                  );
+
+                  setState(() {
+                    final index = _tasks.indexOf(task);
+                    if (index != -1) {
+                      _tasks[index] = updatedTask;
+                    } else {
+                      final completedIndex = _completedTasks.indexOf(task);
+                      if (completedIndex != -1) {
+                        _completedTasks[completedIndex] = updatedTask;
+                      }
+                    }
+                    _calculateTotalTime();
+                  });
+
+                  _saveDailyData();
+                  Navigator.pop(context);
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressIndicator() {
+    final totalTasks = _tasks.length + _completedTasks.length;
+    final completedTasksCount = _completedTasks.length;
+    final progressPercentage = totalTasks > 0 ? completedTasksCount / totalTasks : 0.0;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Daily Progress',
+              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(
+              value: progressPercentage,
+              backgroundColor: Colors.grey[300],
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.teal),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '$completedTasksCount / $totalTasks tasks completed',
+                  style: GoogleFonts.poppins(fontSize: 14),
+                ),
+                Text(
+                  '${(progressPercentage * 100).toInt()}%',
+                  style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Estimated Time', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])),
+                      Text('${_totalEstimatedTime}min', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Completed Time', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])),
+                      Text('${_completedTime}min', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDailyGoalSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.flag, color: Colors.teal),
+                const SizedBox(width: 8),
+                Text(
+                  'Daily Goal',
+                  style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              onChanged: (value) {
+                _dailyGoal = value;
+                _saveDailyData();
+              },
+              decoration: InputDecoration(
+                hintText: 'What do you want to achieve today?',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                contentPadding: const EdgeInsets.all(12),
+              ),
+              controller: TextEditingController(text: _dailyGoal),
+              maxLines: 2,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTaskList(String title, List<Task> tasks, bool isCompleted) {
+    return Card(
+      child: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: isCompleted ? Colors.green[50] : Colors.blue[50],
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(12),
+                topRight: Radius.circular(12),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isCompleted ? Icons.check_circle : Icons.radio_button_unchecked,
+                  color: isCompleted ? Colors.green : Colors.blue,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '$title (${tasks.length})',
+                  style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+          if (tasks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                children: [
+                  Icon(
+                    isCompleted ? Icons.celebration : Icons.add_task,
+                    size: 48,
+                    color: Colors.grey[400],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    isCompleted ? 'No completed tasks yet' : 'No tasks planned',
+                    style: GoogleFonts.poppins(color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            )
+          else
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: tasks.length,
+              itemBuilder: (context, index) {
+                final task = tasks[index];
+                Color priorityColor = task.priority == TaskPriority.high ? Colors.red :
+                task.priority == TaskPriority.medium ? Colors.orange : Colors.green;
+
+                return ListTile(
+                  leading: Checkbox(
+                    value: task.isCompleted,
+                    onChanged: (_) => _toggleTaskCompletion(task),
+                    activeColor: Colors.teal,
+                  ),
+                  title: Text(
+                    task.title,
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      decoration: task.isCompleted ? TextDecoration.lineThrough : null,
+                    ),
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (task.description.isNotEmpty)
+                        Text(task.description, style: GoogleFonts.poppins(fontSize: 12)),
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(color: priorityColor, shape: BoxShape.circle),
+                          ),
+                          const SizedBox(width: 4),
+                          Text('${task.category} • ${task.estimatedDuration}min'),
+                        ],
+                      ),
+                    ],
+                  ),
+                  trailing: PopupMenuButton<String>(
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'edit':
+                          _editTask(task);
+                          break;
+                        case 'delete':
+                          _deleteTask(task);
+                          break;
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                      const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final now = dateOnly(DateTime.now().toLocal());
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -246,288 +648,50 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
       ),
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: SafeArea(
-          child: Column(
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Daily Planner - ${dateOnly(_selectedDay).toString().split(' ')[0]}',
-                      style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.teal),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.calendar_today, color: Colors.teal),
-                      onPressed: () async {
-                        final selectedDate = await showDatePicker(
-                          context: context,
-                          initialDate: _selectedDay,
-                          firstDate: now,
-                          lastDate: DateTime.utc(2030, 12, 31),
-                        );
-                        if (selectedDate != null) {
-                          setState(() {
-                            _selectedDay = selectedDate;
-                            _loadTasks();
-                          });
-                        }
-                      },
-                    ),
-                  ],
-                ),
+              Text(
+                'Daily Planner',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: Colors.teal[800]),
               ),
-              Expanded(
-                child: (_tasks[dateOnly(_selectedDay)]?.isEmpty ?? true)
-                    ? Center(
-                  child: Text(
-                    'No tasks for this day',
-                    style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey),
-                  ),
-                )
-                    : Column(
-                  children: [
-                    Expanded(
-                      child: DraggableGridViewBuilder(
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 1,
-                          childAspectRatio: 4,
-                        ),
-                        children: _tasks[dateOnly(_selectedDay)]!
-                            .asMap()
-                            .entries
-                            .map((entry) => DraggableGridItem(
-                          child: Card(
-                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                            child: ListTile(
-                              title: Text(
-                                entry.value.title,
-                                style: GoogleFonts.poppins(fontSize: 16),
-                              ),
-                              subtitle: Text(
-                                entry.value.isTimeBlocked
-                                    ? '${entry.value.startTime.format(context)} - ${entry.value.endTime.format(context)}'
-                                    : 'Drag to a time slot',
-                                style: GoogleFonts.poppins(fontSize: 14),
-                              ),
-                            ),
-                          ),
-                          isDraggable: !entry.value.isTimeBlocked,
-                          index: entry.key,
-                        ))
-                            .toList(),
-                        dragCompletion: (List<DraggableGridItem> list, int before, int after) {
-                          setState(() {
-                            final draggedTask = _tasks[dateOnly(_selectedDay)]!.removeAt(before);
-                            _tasks[dateOnly(_selectedDay)]!.insert(after, draggedTask);
-                          });
-                        },
-                      ),
-                    ),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: _timeSlots.length,
-                        itemBuilder: (context, index) {
-                          final slot = _timeSlots[index];
-                          final tasksInSlot = (_tasks[dateOnly(_selectedDay)] ?? [])
-                              .where((task) =>
-                          task.isTimeBlocked &&
-                              task.startTime.hour == slot.startTime.hour &&
-                              task.startTime.minute == slot.startTime.minute)
-                              .toList();
-                          return DragTarget<Task>(
-                            builder: (context, candidateData, rejectedData) {
-                              return Card(
-                                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                                color: candidateData.isNotEmpty ? Colors.teal.withOpacity(0.2) : null,
-                                child: ListTile(
-                                  title: Text(
-                                    '${slot.startTime.format(context)} - ${slot.endTime.format(context)}',
-                                    style: GoogleFonts.poppins(fontSize: 16),
-                                  ),
-                                  subtitle: tasksInSlot.isEmpty
-                                      ? Text('Empty', style: GoogleFonts.poppins(color: Colors.grey))
-                                      : Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: tasksInSlot
-                                        .map((task) => Text(
-                                      task.title,
-                                      style: GoogleFonts.poppins(fontSize: 14),
-                                    ))
-                                        .toList(),
-                                  ),
-                                ),
-                              );
-                            },
-                            onAccept: (task) {
-                              if (_checkForOverlap(
-                                  task.copyWith(startTime: slot.startTime, endTime: slot.endTime),
-                                  dateOnly(_selectedDay),
-                                  _tasks[dateOnly(_selectedDay)]!)) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Time slot overlaps with another task')),
-                                );
-                              } else {
-                                setState(() {
-                                  task.isTimeBlocked = true;
-                                  task.startTime = slot.startTime;
-                                  task.endTime = slot.endTime;
-                                });
-                                _saveTask(dateOnly(_selectedDay), task);
-                              }
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
+              Text(
+                DateFormat('EEEE, MMMM d, y').format(widget.selectedDate),
+                style: GoogleFonts.poppins(fontSize: 14, color: Colors.teal[600]),
               ),
             ],
           ),
+          actions: [
+            IconButton(
+              onPressed: _showAddTaskDialog,
+              icon: const Icon(Icons.add, color: Colors.teal),
+            ),
+          ],
         ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () async {
-            final result = await showDialog<Task>(
-              context: context,
-              builder: (context) => AddTaskDialog(),
-            );
-            if (result != null) {
-              setState(() {
-                _tasks.putIfAbsent(dateOnly(_selectedDay), () => []).add(result);
-              });
-              _saveTask(dateOnly(_selectedDay), result);
-            }
-          },
-          backgroundColor: Colors.teal,
-          child: const Icon(Icons.add),
+        body: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+          onRefresh: _loadDailyData,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: Column(
+              children: [
+                _buildProgressIndicator(),
+                const SizedBox(height: 16),
+                _buildDailyGoalSection(),
+                const SizedBox(height: 16),
+                _buildTaskList('Pending Tasks', _tasks, false),
+                const SizedBox(height: 16),
+                _buildTaskList('Completed Tasks', _completedTasks, true),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
-
-class AddTaskDialog extends StatefulWidget {
-  @override
-  _AddTaskDialogState createState() => _AddTaskDialogState();
-}
-
-class _AddTaskDialogState extends State<AddTaskDialog> {
-  final _titleController = TextEditingController();
-  TimeOfDay _startTime = TimeOfDay.now();
-  TimeOfDay _endTime = TimeOfDay.now();
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Add Task', style: GoogleFonts.poppins()),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _titleController,
-            decoration: InputDecoration(labelText: 'Task Title'),
-          ),
-          TextButton(
-            onPressed: () async {
-              final time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
-              if (time != null) setState(() => _startTime = time);
-            },
-            child: Text('Start Time: ${_startTime.format(context)}'),
-          ),
-          TextButton(
-            onPressed: () async {
-              final time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
-              if (time != null) setState(() => _endTime = time);
-            },
-            child: Text('End Time: ${_endTime.format(context)}'),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text('Cancel'),
-        ),
-        TextButton(
-          onPressed: () {
-            if (_titleController.text.isNotEmpty) {
-              Navigator.pop(
-                context,
-                Task(
-                  title: _titleController.text,
-                  isTimeBlocked: false,
-                  startTime: _startTime,
-                  endTime: _endTime,
-                ),
-              );
-            }
-          },
-          child: Text('Add'),
-        ),
-      ],
-    );
-  }
-}
-
-class Task {
-  final String title;
-  bool isTimeBlocked;
-  TimeOfDay startTime;
-  TimeOfDay endTime;
-  final String? jobId;
-
-  Task({
-    required this.title,
-    this.isTimeBlocked = false,
-    required this.startTime,
-    required this.endTime,
-    this.jobId,
-  });
-
-  Task copyWith({TimeOfDay? startTime, TimeOfDay? endTime, bool? isTimeBlocked}) {
-    return Task(
-      title: title,
-      isTimeBlocked: isTimeBlocked ?? this.isTimeBlocked,
-      startTime: startTime ?? this.startTime,
-      endTime: endTime ?? this.endTime,
-      jobId: jobId,
-    );
-  }
-
-  Map<String, dynamic> toMap() => {
-    'title': title,
-    'isTimeBlocked': isTimeBlocked,
-    'startTime': '${startTime.hour}:${startTime.minute}',
-    'endTime': '${endTime.hour}:${endTime.minute}',
-    'jobId': jobId,
-  };
-
-  factory Task.fromMap(Map<String, dynamic> map) {
-    final startParts = (map['startTime'] as String).split(':');
-    final endParts = (map['endTime'] as String).split(':');
-    final startTime = TimeOfDay(
-      hour: int.parse(startParts[0]),
-      minute: int.parse(startParts[1]),
-    );
-    final endTime = TimeOfDay(
-      hour: int.parse(endParts[0]),
-      minute: int.parse(endParts[1]),
-    );
-    return Task(
-      title: map['title'] as String,
-      isTimeBlocked: map['isTimeBlocked'] as bool? ?? false,
-      startTime: startTime,
-      endTime: endTime,
-      jobId: map['jobId'] as String?,
-    );
-  }
-}
-
-class TimeSlot {
-  final TimeOfDay startTime;
-  final TimeOfDay endTime;
-
-  TimeSlot({required this.startTime, required this.endTime});
-}*/
