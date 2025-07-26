@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fyp/Add%20Job%20Module/JobDetailPage.dart';
+import '../Notification Module/NotificationService.dart';
 import 'TaskProgressTracker.dart';
 
 class ManageApplicantsPage extends StatefulWidget {
@@ -302,6 +303,15 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
 
     double totalProgress = teamPerformanceData.fold(0.0, (sum, item) => sum + item['progress']);
     double avgProgress = totalProgress / teamPerformanceData.length;
+
+    for (var member in teamPerformanceData) {
+      await NotificationService().sendProgressNotification(
+        userId: member['userId'],
+        taskTitle: widget.jobPosition,
+        taskId: widget.jobId,
+        progressPercentage: member['progress'],
+      );
+    }
 
     try {
       await FirebaseFirestore.instance

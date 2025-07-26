@@ -71,8 +71,6 @@ dependencies:
   open_file: ^3.3.2
   agora_rtc_engine: ^6.2.0
   flutter_draggable_gridview: ^0.0.13
-  #flutter_local_notifications: ^19.3.1
-  timezone: ^0.10.1
 
 
 
