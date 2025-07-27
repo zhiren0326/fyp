@@ -28,7 +28,6 @@ class AppNotification {
   final bool read;
   final Map<String, dynamic> data;
   final String? actionUrl;
-  final String? imageUrl;
 
   AppNotification({
     required this.id,
@@ -40,7 +39,6 @@ class AppNotification {
     this.read = false,
     this.data = const {},
     this.actionUrl,
-    this.imageUrl,
   });
 
   factory AppNotification.fromFirestore(DocumentSnapshot doc) {
@@ -56,52 +54,7 @@ class AppNotification {
       read: data['read'] ?? false,
       data: Map<String, dynamic>.from(data['data'] ?? {}),
       actionUrl: data['actionUrl'],
-      imageUrl: data['imageUrl'],
     );
-  }
-
-  static NotificationType _parseNotificationType(dynamic type) {
-    if (type is String) {
-      switch (type.toLowerCase()) {
-        case 'task':
-          return NotificationType.task;
-        case 'deadline':
-          return NotificationType.deadline;
-        case 'job':
-          return NotificationType.job;
-        case 'system':
-          return NotificationType.system;
-        case 'acceptance':
-          return NotificationType.acceptance;
-        case 'rejection':
-          return NotificationType.rejection;
-        case 'reminder':
-          return NotificationType.reminder;
-        case 'progress':
-          return NotificationType.progress;
-        default:
-          return NotificationType.system;
-      }
-    }
-    return NotificationType.system;
-  }
-
-  static NotificationPriority _parseNotificationPriority(dynamic priority) {
-    if (priority is String) {
-      switch (priority.toLowerCase()) {
-        case 'low':
-          return NotificationPriority.low;
-        case 'medium':
-          return NotificationPriority.medium;
-        case 'high':
-          return NotificationPriority.high;
-        case 'critical':
-          return NotificationPriority.critical;
-        default:
-          return NotificationPriority.medium;
-      }
-    }
-    return NotificationPriority.medium;
   }
 
   Map<String, dynamic> toFirestore() {
@@ -110,11 +63,10 @@ class AppNotification {
       'title': title,
       'type': type.toString().split('.').last,
       'priority': priority.toString().split('.').last,
-      'timestamp': Timestamp.fromDate(timestamp),
+      'timestamp': FieldValue.serverTimestamp(),
       'read': read,
       'data': data,
       'actionUrl': actionUrl,
-      'imageUrl': imageUrl,
     };
   }
 
@@ -128,7 +80,6 @@ class AppNotification {
     bool? read,
     Map<String, dynamic>? data,
     String? actionUrl,
-    String? imageUrl,
   }) {
     return AppNotification(
       id: id ?? this.id,
@@ -140,7 +91,60 @@ class AppNotification {
       read: read ?? this.read,
       data: data ?? this.data,
       actionUrl: actionUrl ?? this.actionUrl,
-      imageUrl: imageUrl ?? this.imageUrl,
     );
   }
+
+  static NotificationType _parseNotificationType(dynamic value) {
+    if (value == null) return NotificationType.system;
+
+    final typeString = value.toString().toLowerCase();
+    switch (typeString) {
+      case 'task':
+        return NotificationType.task;
+      case 'deadline':
+        return NotificationType.deadline;
+      case 'job':
+        return NotificationType.job;
+      case 'acceptance':
+        return NotificationType.acceptance;
+      case 'rejection':
+        return NotificationType.rejection;
+      case 'reminder':
+        return NotificationType.reminder;
+      case 'progress':
+        return NotificationType.progress;
+      default:
+        return NotificationType.system;
+    }
+  }
+
+  static NotificationPriority _parseNotificationPriority(dynamic value) {
+    if (value == null) return NotificationPriority.medium;
+
+    final priorityString = value.toString().toLowerCase();
+    switch (priorityString) {
+      case 'low':
+        return NotificationPriority.low;
+      case 'high':
+        return NotificationPriority.high;
+      case 'critical':
+        return NotificationPriority.critical;
+      default:
+        return NotificationPriority.medium;
+    }
+  }
+
+  @override
+  String toString() {
+    return 'AppNotification(id: $id, message: $message, type: $type, priority: $priority, read: $read)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is AppNotification && other.id == id;
+  }
+
+  @override
+  int get hashCode => id.hashCode;
 }

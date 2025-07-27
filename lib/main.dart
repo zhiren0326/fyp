@@ -10,6 +10,8 @@ import 'package:fyp/firebase_options.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
+import 'Notification Module/HybridNotificationService.dart';
+import 'Notification Module/PopupNotificationManager.dart';
 
 bool? seenOnboard;
 bool _isFirebaseInitialized = false;
@@ -17,6 +19,8 @@ bool _allowDataSharing = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  tz.initializeTimeZones();
 
   // Initialize Firebase
   try {
@@ -26,6 +30,8 @@ Future<void> main() async {
     print('Firebase initialization failed: $e');
     _isFirebaseInitialized = false;
   }
+
+  await HybridNotificationService().initialize();
 
   // Initialize Firebase Analytics
   FirebaseAnalytics analytics = FirebaseAnalytics.instance;
@@ -132,5 +138,43 @@ class AnalyticsNavigatorObserver extends NavigatorObserver {
       );
       print('Screen view logged: $screenName');
     }
+  }
+}
+class AppWithNotifications extends StatefulWidget {
+  final Widget child;
+
+  const AppWithNotifications({super.key, required this.child});
+
+  @override
+  State<AppWithNotifications> createState() => _AppWithNotificationsState();
+}
+
+class _AppWithNotificationsState extends State<AppWithNotifications> {
+  late NotificationAppLifecycleManager _lifecycleManager;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Initialize lifecycle manager
+    _lifecycleManager = NotificationAppLifecycleManager();
+    _lifecycleManager.initialize();
+
+    // Initialize popup notification manager
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      PopupNotificationManager().initialize(context);
+    });
+  }
+
+  @override
+  void dispose() {
+    _lifecycleManager.dispose();
+    PopupNotificationManager().dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
   }
 }
