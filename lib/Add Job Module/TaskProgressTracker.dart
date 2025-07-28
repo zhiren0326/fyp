@@ -18,7 +18,7 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
   double currentProgress = 0.0;
   List<Map<String, dynamic>> milestones = [];
   List<Map<String, dynamic>> subTasks = [];
-  String selectedStatus = 'In Progress';
+  String selectedStatus = 'In Progress'; // Default value
 
   final TextEditingController milestoneController = TextEditingController();
   final TextEditingController progressController = TextEditingController();
@@ -33,11 +33,15 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
     'Cancelled'
   ];
 
+  bool _isLoading = true; // Track loading state
+
   @override
   void initState() {
     super.initState();
     if (widget.taskId != null) {
       _loadTaskProgress();
+    } else {
+      setState(() => _isLoading = false); // No taskId, no loading needed
     }
   }
 
@@ -65,12 +69,16 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
           currentProgress = (data['currentProgress'] ?? 0.0).toDouble();
           milestones = List<Map<String, dynamic>>.from(data['milestones'] ?? []);
           subTasks = List<Map<String, dynamic>>.from(data['subTasks'] ?? []);
-          selectedStatus = data['status'] ?? 'In Progress';
+          selectedStatus = statusOptions.contains(data['status']) ? data['status']! : 'In Progress'; // Validate status
           notesController.text = data['notes'] ?? '';
+          _isLoading = false;
         });
+      } else {
+        setState(() => _isLoading = false); // Handle non-existent document
       }
     } catch (e) {
       print('Error loading task progress: $e');
+      setState(() => _isLoading = false); // Ensure UI updates even on error
     }
   }
 
@@ -95,7 +103,6 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
         'lastUpdated': Timestamp.now(),
       }, SetOptions(merge: true));
 
-      // Log activity
       await _logProgressActivity();
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -155,10 +162,10 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
   }
 
   void _updateProgressFromMilestones() {
-    if (milestones.isEmpty) return;
+    if (milestones.isEmpty && subTasks.isEmpty) return;
 
     int completedMilestones = milestones.where((m) => m['completed'] == true).length;
-    double milestonesProgress = (completedMilestones / milestones.length) * 100;
+    double milestonesProgress = milestones.isEmpty ? 0 : (completedMilestones / milestones.length) * 100;
 
     int completedSubTasks = subTasks.where((s) => s['completed'] == true).length;
     double subTasksProgress = subTasks.isEmpty ? 0 : (completedSubTasks / subTasks.length) * 100;
@@ -338,7 +345,7 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
           ),
           const SizedBox(height: 15),
           DropdownButtonFormField<String>(
-            value: selectedStatus,
+            value: statusOptions.contains(selectedStatus) ? selectedStatus : null, // Use null if invalid
             items: statusOptions.map((status) {
               return DropdownMenuItem(
                 value: status,
@@ -358,13 +365,14 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
                 ),
               );
             }).toList(),
-            onChanged: (value) => setState(() => selectedStatus = value!),
+            onChanged: (value) => setState(() => selectedStatus = value ?? 'In Progress'), // Fallback to default
             decoration: InputDecoration(
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
               ),
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             ),
+            hint: const Text('Select Status', style: TextStyle(color: Colors.grey)),
           ),
         ],
       ),
@@ -611,7 +619,9 @@ class _TaskProgressTrackerState extends State<TaskProgressTracker> {
             ),
           ],
         ),
-        body: ListView(
+        body: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(
           padding: const EdgeInsets.all(16),
           children: [
             if (widget.taskTitle != null)
