@@ -1,137 +1,166 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:fyp/Reward%20Module/RealtimeLeaderboard.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-class RewardPage extends StatefulWidget {
-  const RewardPage({super.key});
+class RewardsPage extends StatefulWidget {
+  const RewardsPage({super.key});
 
   @override
-  State<RewardPage> createState() => _RewardPageState();
+  State<RewardsPage> createState() => _RewardsPageState();
 }
 
-class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
-  late TabController _tabController;
+class _RewardsPageState extends State<RewardsPage> {
   int _userPoints = 0;
-  int _userRank = 0;
+  List<Map<String, dynamic>> _topPerformers = [];
+  bool _isLoading = true;
   bool _isRedeeming = false;
 
   final List<Map<String, dynamic>> _redeemableItems = [
     {
-      'id': 'gift_card_10',
-      'name': 'RM10 Gift Card',
-      'points': 50,
-      'description': 'Digital gift card for online shopping',
+      'id': 'rm10_shopee',
+      'name': 'RM10 Shopee Gift Card',
+      'points': 1000,
+      'description': 'Digital gift card for Shopee online shopping',
       'category': 'gift_cards',
       'icon': Icons.card_giftcard,
-      'color': Colors.purple,
+      'color': const Color(0xFFFF6B35),
     },
     {
-      'id': 'gift_card_25',
-      'name': 'RM25 Gift Card',
-      'points': 120,
-      'description': 'Digital gift card for online shopping',
-      'category': 'gift_cards',
-      'icon': Icons.card_giftcard,
-      'color': Colors.purple,
+      'id': 'movie_ticket',
+      'name': 'Movie Ticket',
+      'points': 1500,
+      'description': 'Cinema ticket for latest movies',
+      'category': 'entertainment',
+      'icon': Icons.local_movies,
+      'color': const Color(0xFF8E44AD),
+    },
+    {
+      'id': 'food_voucher',
+      'name': 'Food Voucher',
+      'points': 800,
+      'description': 'RM20 food voucher at participating restaurants',
+      'category': 'vouchers',
+      'icon': Icons.restaurant,
+      'color': const Color(0xFF27AE60),
+    },
+    {
+      'id': 'spotify_premium',
+      'name': 'Spotify Premium',
+      'points': 2000,
+      'description': '1 month Spotify Premium subscription',
+      'category': 'subscriptions',
+      'icon': Icons.headphones,
+      'color': const Color(0xFFE74C3C),
+    },
+    {
+      'id': 'grab_voucher',
+      'name': 'Grab Voucher',
+      'points': 600,
+      'description': 'RM15 Grab ride voucher',
+      'category': 'transportation',
+      'icon': Icons.local_taxi,
+      'color': const Color(0xFF00D4AA),
     },
     {
       'id': 'coffee_voucher',
       'name': 'Coffee Voucher',
-      'points': 30,
-      'description': 'Free coffee at participating cafes',
-      'category': 'vouchers',
+      'points': 400,
+      'description': 'Free coffee at Starbucks or local cafes',
+      'category': 'beverages',
       'icon': Icons.local_cafe,
-      'color': Colors.brown,
-    },
-    {
-      'id': 'premium_month',
-      'name': '1 Month Premium',
-      'points': 200,
-      'description': 'Premium app features for 1 month',
-      'category': 'premium',
-      'icon': Icons.star,
-      'color': Colors.amber,
-    },
-    {
-      'id': 'premium_year',
-      'name': '1 Year Premium',
-      'points': 2000,
-      'description': 'Premium app features for 1 year',
-      'category': 'premium',
-      'icon': Icons.stars,
-      'color': Colors.amber,
-    },
-    {
-      'id': 'merchandise_tshirt',
-      'name': 'Taaz T-Shirt',
-      'points': 150,
-      'description': 'Official branded t-shirt',
-      'category': 'merchandise',
-      'icon': Icons.checkroom,
-      'color': Colors.teal,
-    },
-    {
-      'id': 'merchandise_mug',
-      'name': 'Taaz Mug',
-      'points': 80,
-      'description': 'Official branded coffee mug',
-      'category': 'merchandise',
-      'icon': Icons.coffee_maker,
-      'color': Colors.teal,
+      'color': const Color(0xFF8B4513),
     },
   ];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
-    _loadUserData();
+    _loadData();
   }
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
+  Future<void> _loadData() async {
+    await Future.wait([
+      _loadUserPoints(),
+      _loadTopPerformers(),
+    ]);
+    setState(() => _isLoading = false);
   }
 
-  Future<void> _loadUserData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  Future<void> _loadUserPoints() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
 
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('profiledetails')
-        .doc('profile')
-        .get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('profiledetails')
+          .doc('profile')
+          .get();
 
-    if (doc.exists) {
-      setState(() {
-        _userPoints = (doc.data()?['points'] ?? 0) as int;
-      });
-      await _calculateUserRank();
+      if (doc.exists) {
+        setState(() {
+          _userPoints = (doc.data()?['points'] ?? 0) as int;
+        });
+      }
+    } catch (e) {
+      print('Error loading user points: $e');
     }
   }
 
-  Future<void> _calculateUserRank() async {
+  Future<void> _loadTopPerformers() async {
     try {
-      final usersWithHigherPoints = await FirebaseFirestore.instance
+      // Get all users and their profile data
+      final usersSnapshot = await FirebaseFirestore.instance
           .collection('users')
-          .where('points', isGreaterThan: _userPoints)
+          .limit(20) // Limit to prevent excessive reads
           .get();
 
+      List<Map<String, dynamic>> performers = [];
+
+      for (var userDoc in usersSnapshot.docs) {
+        try {
+          final profileDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userDoc.id)
+              .collection('profiledetails')
+              .doc('profile')
+              .get();
+
+          if (profileDoc.exists) {
+            final profileData = profileDoc.data()!;
+            final points = (profileData['points'] ?? 0) as int;
+
+            if (points > 0) {
+              performers.add({
+                'userId': userDoc.id,
+                'name': profileData['name'] ?? 'Unknown User',
+                'photoURL': profileData['photoURL'] ?? '',
+                'points': points,
+              });
+            }
+          }
+        } catch (e) {
+          print('Error processing user ${userDoc.id}: $e');
+        }
+      }
+
+      // Sort by points and take top 3
+      performers.sort((a, b) => (b['points'] as int).compareTo(a['points'] as int));
+
       setState(() {
-        _userRank = usersWithHigherPoints.docs.length + 1;
+        _topPerformers = performers.take(3).toList();
       });
     } catch (e) {
-      print('Error calculating rank: $e');
+      print('Error loading top performers: $e');
     }
   }
 
   Future<void> _redeemItem(Map<String, dynamic> item) async {
     if (_userPoints < item['points']) {
-      _showSnackBar('Insufficient points!', Colors.red);
+      _showSnackBar('Insufficient points! You need ${item['points']} points.', Colors.red);
       return;
     }
 
@@ -139,29 +168,90 @@ class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Confirm Redemption', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: Text(
+          'Confirm Redemption',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Are you sure you want to redeem:', style: GoogleFonts.poppins()),
-            const SizedBox(height: 8),
-            Text(item['name'], style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-            Text('${item['points']} points', style: GoogleFonts.poppins(color: Colors.orange)),
-            const SizedBox(height: 8),
-            Text('Your remaining points: ${_userPoints - item['points']}',
-                style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: item['color'].withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: item['color'].withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(item['icon'], color: item['color'], size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item['name'],
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          '${item['points']} points',
+                          style: GoogleFonts.poppins(
+                            color: item['color'],
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Remaining points: ${_userPoints - item['points']}',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: Colors.orange[700],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text('Cancel', style: GoogleFonts.poppins()),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF006D77)),
-            child: const Text('Redeem', style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF006D77),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: Text(
+              'Redeem',
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),
@@ -208,6 +298,8 @@ class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
           'timestamp': Timestamp.now(),
           'status': 'pending', // pending, processed, delivered
           'redemptionCode': _generateRedemptionCode(),
+          'category': item['category'],
+          'description': item['description'],
         });
 
         // Add to points history
@@ -230,7 +322,6 @@ class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
         _userPoints -= item['points'] as int;
       });
 
-      _showSnackBar('Item redeemed successfully!', Colors.green);
       _showRedemptionSuccess(item);
 
     } catch (e) {
@@ -242,7 +333,7 @@ class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
 
   String _generateRedemptionCode() {
     final now = DateTime.now();
-    final code = 'FK${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.millisecond}';
+    final code = 'RWD${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.millisecond}';
     return code;
   }
 
@@ -250,29 +341,61 @@ class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         title: Row(
           children: [
-            Icon(Icons.check_circle, color: Colors.green, size: 24),
-            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.green[100],
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.check, color: Colors.green, size: 24),
+            ),
+            const SizedBox(width: 12),
             Text('Success!', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('You have successfully redeemed:', style: GoogleFonts.poppins()),
-            const SizedBox(height: 8),
-            Text(item['name'],
-                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
-            const SizedBox(height: 12),
+            Text(
+              'You have successfully redeemed:',
+              style: GoogleFonts.poppins(),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: item['color'].withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: item['color'].withOpacity(0.3)),
+              ),
+              child: Column(
+                children: [
+                  Icon(item['icon'], color: item['color'], size: 32),
+                  const SizedBox(height: 8),
+                  Text(
+                    item['name'],
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.grey[100],
+                color: Colors.blue[50],
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                'Check your redemption history for the redemption code and instructions.',
+                'Check your redemption history for the redemption code and instructions. You will receive further details via email.',
                 style: GoogleFonts.poppins(fontSize: 12),
                 textAlign: TextAlign.center,
               ),
@@ -282,8 +405,19 @@ class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
         actions: [
           ElevatedButton(
             onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF006D77)),
-            child: const Text('OK', style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF006D77),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: Text(
+              'OK',
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),
@@ -296,222 +430,398 @@ class _RewardPageState extends State<RewardPage> with TickerProviderStateMixin {
         content: Text(message),
         backgroundColor: color,
         duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
 
-  Widget _buildTabContent(String tab) {
-    switch (tab) {
-      case 'Points':
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: const BoxDecoration(
+        color: Color(0xFF006D77),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(25),
+          bottomRight: Radius.circular(25),
+        ),
+      ),
+      child: SafeArea(
+        child: Column(
           children: [
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Your Points',
-                      style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      '$_userPoints pts',
-                      style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: const Color(0xFF006D77)),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Rank: $_userRank',
-                      style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey),
-                    ),
-                  ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
                 ),
-              ),
+                Text(
+                  'Rewards',
+                  style: GoogleFonts.poppins(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 48), // Balance the back button
+              ],
             ),
-          ],
-        );
-      case 'Redeem':
-        return GridView.builder(
-          padding: const EdgeInsets.all(8.0),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            childAspectRatio: 0.9,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-          ),
-          itemCount: _redeemableItems.length,
-          itemBuilder: (context, index) {
-            final item = _redeemableItems[index];
-            return Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              color: item['color'],
-              child: InkWell(
-                onTap: _isRedeeming ? null : () => _redeemItem(item),
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: Colors.white.withOpacity(0.2)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.stars, color: Colors.amber, size: 32),
+                  const SizedBox(width: 12),
+                  Column(
                     children: [
-                      Icon(item['icon'], size: 40, color: Colors.white),
-                      const SizedBox(height: 10),
                       Text(
-                        item['name'],
-                        textAlign: TextAlign.center,
+                        '$_userPoints pts',
                         style: GoogleFonts.poppins(
-                          fontSize: 16,
+                          fontSize: 28,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
                       ),
-                      const SizedBox(height: 5),
                       Text(
-                        '${item['points']} pts',
+                        'Your Points',
                         style: GoogleFonts.poppins(
                           fontSize: 14,
-                          color: Colors.white,
+                          color: Colors.white.withOpacity(0.8),
                         ),
                       ),
-                      if (_isRedeeming)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 10),
-                          child: CircularProgressIndicator(color: Colors.white),
-                        ),
                     ],
                   ),
-                ),
+                ],
               ),
-            );
-          },
-        );
-      case 'Leaderboard':
-        return ListView.builder(
-          padding: const EdgeInsets.all(8.0),
-          itemCount: 5, // Assuming top 5 for now (dynamic loading can be added)
-          itemBuilder: (context, index) {
-            return FutureBuilder(
-              future: FirebaseFirestore.instance
-                  .collection('users')
-                  .orderBy('points', descending: true)
-                  .limit(5)
-                  .get(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const ListTile(
-                    leading: CircularProgressIndicator(),
-                    title: Text('Loading...'),
-                  );
-                }
-                final user = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-                return ListTile(
-                  leading: CircleAvatar(child: Text('${index + 1}')),
-                  title: Text(user['name'] ?? 'Anonymous'),
-                  trailing: Text('${user['points'] ?? 0} pts'),
-                );
-              },
-            );
-          },
-        );
-      case 'Badges':
-        return ListView.builder(
-          padding: const EdgeInsets.all(8.0),
-          itemCount: 3, // Bronze, Silver, Gold
-          itemBuilder: (context, index) {
-            final thresholds = [100, 300, 500];
-            final names = ['Bronze Badge', 'Silver Badge', 'Gold Badge'];
-            final achieved = _userPoints >= thresholds[index];
-            return Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              child: ListTile(
-                leading: Icon(
-                  Icons.star,
-                  color: achieved ? Colors.amber : Colors.grey,
-                ),
-                title: Text(names[index]),
-                subtitle: Text('${thresholds[index]}+ points'),
-                trailing: achieved
-                    ? const Icon(Icons.check, color: Colors.green)
-                    : const Text('Not Achieved'),
-              ),
-            );
-          },
-        );
-      default:
-        return const SizedBox.shrink();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFB2DFDB), Colors.white],
+            ),
+          ],
         ),
       ),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: SafeArea(
-          child: Column(
+    );
+  }
+
+  Widget _buildTopPerformers() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: const BoxDecoration(
-                  borderRadius: BorderRadius.only(
-                    bottomLeft: Radius.circular(12),
-                    bottomRight: Radius.circular(12),
-                  ),
-                ),
-                child: Text(
-                  'Rewards',
-                  style: GoogleFonts.poppins(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                  textAlign: TextAlign.center,
+              Text(
+                'Top Performers',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF006D77),
                 ),
               ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      TabBar(
-                        controller: _tabController,
-                        labelStyle: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-                        tabs: const [
-                          Tab(text: 'Points'),
-                          Tab(text: 'Redeem'),
-                          Tab(text: 'Leaderboard'),
-                          Tab(text: 'Badges'),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Expanded(
-                        child: TabBarView(
-                          controller: _tabController,
-                          children: [
-                            _buildTabContent('Points'),
-                            _buildTabContent('Redeem'),
-                            _buildTabContent('Leaderboard'),
-                            _buildTabContent('Badges'),
-                          ],
-                        ),
-                      ),
-                    ],
+              TextButton(
+                onPressed: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => RealtimeLeaderboard()));
+                },
+                child: Text(
+                  'View All',
+                  style: GoogleFonts.poppins(
+                    color: const Color(0xFF006D77),
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          if (_topPerformers.isEmpty)
+            Center(
+              child: Text(
+                'No performers data available',
+                style: GoogleFonts.poppins(color: Colors.grey),
+              ),
+            )
+          else
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: _topPerformers.asMap().entries.map((entry) {
+                int index = entry.key;
+                Map<String, dynamic> performer = entry.value;
+                return _buildPerformerCard(performer, index);
+              }).toList(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPerformerCard(Map<String, dynamic> performer, int index) {
+    Color rankColor = Colors.grey;
+    IconData rankIcon = Icons.emoji_events;
+
+    if (index == 0) {
+      rankColor = Colors.amber;
+    } else if (index == 1) {
+      rankColor = Colors.grey[400]!;
+    } else if (index == 2) {
+      rankColor = Colors.brown;
+    }
+
+    return Column(
+      children: [
+        Stack(
+          children: [
+            CircleAvatar(
+              radius: 30,
+              backgroundImage: performer['photoURL'].isNotEmpty
+                  ? NetworkImage(performer['photoURL'])
+                  : null,
+              backgroundColor: Colors.grey[200],
+              child: performer['photoURL'].isEmpty
+                  ? const Icon(Icons.person, size: 30, color: Colors.grey)
+                  : null,
+            ),
+            if (index < 3)
+              Positioned(
+                top: -5,
+                right: -5,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: rankColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    rankIcon,
+                    size: 16,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          performer['name'].length > 8
+              ? '${performer['name'].substring(0, 8)}...'
+              : performer['name'],
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${performer['points']} pts',
+          style: GoogleFonts.poppins(
+            fontSize: 11,
+            color: Colors.grey[600],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRedeemRewards() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Redeem Rewards',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF006D77),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF6B35),
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Text(
+                  '$_userPoints pts',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.85,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            itemCount: _redeemableItems.length,
+            itemBuilder: (context, index) {
+              final item = _redeemableItems[index];
+              final canAfford = _userPoints >= item['points'];
+
+              return GestureDetector(
+                onTap: _isRedeeming || !canAfford ? null : () => _redeemItem(item),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: canAfford ? Colors.white : Colors.grey[100],
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.1),
+                        blurRadius: 6,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Container(
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: item['color'].withOpacity(0.1),
+                            borderRadius: const BorderRadius.only(
+                              topLeft: Radius.circular(12),
+                              topRight: Radius.circular(12),
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                item['icon'],
+                                size: 40,
+                                color: canAfford ? item['color'] : Colors.grey,
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.stars,
+                                    size: 16,
+                                    color: canAfford ? Colors.amber : Colors.grey,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${item['points']} points',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: canAfford ? item['color'] : Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item['name'],
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: canAfford ? Colors.black : Colors.grey,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const Spacer(),
+                              if (_isRedeeming)
+                                const Center(
+                                  child: SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  ),
+                                )
+                              else
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: canAfford ? item['color'] : Colors.grey[300],
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    canAfford ? 'Redeem' : 'Need ${item['points'] - _userPoints} pts',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: canAfford ? Colors.white : Colors.grey[600],
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+        child: Column(
+          children: [
+            _buildHeader(),
+            _buildTopPerformers(),
+            _buildRedeemRewards(),
+            const SizedBox(height: 20),
+          ],
         ),
       ),
     );

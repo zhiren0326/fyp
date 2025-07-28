@@ -33,7 +33,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     const ActivityLogScreen(),
     const CalendarPage(),
     const ChatScreen(),
-    const RewardPage(),
+    const RewardsPage(),
     AccountPage(),
   ];
 

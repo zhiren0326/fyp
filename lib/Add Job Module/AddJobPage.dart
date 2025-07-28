@@ -191,8 +191,8 @@ class _AddJobPageState extends State<AddJobPage> {
         await docRef.update({'jobId': docRef.id});
         _showSnackBar('Job posted successfully!');
 
-        // Create task progress tracking
-        await _createTaskProgress(docRef.id);
+        // Create task progress tracking with jobCreator field
+        await _createTaskProgress(docRef.id, currentUser.uid);
 
         // Schedule deadline reminders if it's a short-term job
         if (isShortTerm) {
@@ -242,6 +242,7 @@ class _AddJobPageState extends State<AddJobPage> {
       'isCompleted': false,
       'postedAt': widget.jobId == null ? Timestamp.now() : FieldValue.serverTimestamp(),
       'postedBy': userId,
+      'jobCreator': userId, // Add this field to identify job creator
 
       // Task Management additions
       'priority': selectedPriority,
@@ -327,7 +328,7 @@ class _AddJobPageState extends State<AddJobPage> {
     return reminders;
   }
 
-  Future<void> _createTaskProgress(String jobId) async {
+  Future<void> _createTaskProgress(String jobId, String jobCreatorId) async {
     try {
       await FirebaseFirestore.instance
           .collection('users')
@@ -342,6 +343,8 @@ class _AddJobPageState extends State<AddJobPage> {
         'createdAt': Timestamp.now(),
         'lastUpdated': Timestamp.now(),
         'status': 'created',
+        'jobCreator': jobCreatorId, // Store job creator ID
+        'canEditProgress': [jobCreatorId], // List of users who can edit progress
       });
     } catch (e) {
       print('Error creating task progress: $e');
