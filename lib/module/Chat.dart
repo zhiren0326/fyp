@@ -8,6 +8,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({Key? key}) : super(key: key);
@@ -16,7 +18,7 @@ class ChatScreen extends StatefulWidget {
   _ChatScreenState createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _groupSearchController = TextEditingController();
   String? _currentUserCustomId;
@@ -24,20 +26,284 @@ class _ChatScreenState extends State<ChatScreen> {
   List<DocumentSnapshot> _groupSearchResults = [];
   List<Map<String, dynamic>> _createdGroups = [];
 
+  // For notification management
+  Set<String> _processedMessageIds = {};
+  bool _isAppInForeground = true;
+  Map<String, dynamic> _lastMessageTimestamps = {};
+
+  // Add unread message counters
+  Map<String, int> _unreadMessageCounts = {};
+
+  // Notification plugin
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _initializeNotifications();
     _initializeUserCustomId();
     _loadCreatedGroups();
     _listenForNewMessages();
+    _loadLastMessageTimestamps();
+    _loadUnreadMessageCounts();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     _groupSearchController.dispose();
     super.dispose();
   }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    setState(() {
+      _isAppInForeground = state == AppLifecycleState.resumed;
+    });
+
+    // Clear badge when app comes to foreground if all messages are read
+    if (state == AppLifecycleState.resumed) {
+      int totalUnread = 0;
+      _unreadMessageCounts.forEach((key, value) {
+        totalUnread += value;
+      });
+      if (totalUnread == 0) {
+      }
+    }
+  }
+
+  // Load unread message counts from Firestore
+  Future<void> _loadUnreadMessageCounts() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      final unreadDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('unread_counts')
+          .doc('counts')
+          .get();
+
+      if (unreadDoc.exists) {
+        setState(() {
+          _unreadMessageCounts = Map<String, int>.from(unreadDoc.data() ?? {});
+        });
+      }
+    } catch (e) {
+      print('Error loading unread counts: $e');
+    }
+  }
+
+  // Listen for unread count changes
+  void _listenForUnreadCounts() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('unread_counts')
+        .doc('counts')
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.exists) {
+        setState(() {
+          _unreadMessageCounts = Map<String, int>.from(snapshot.data() ?? {});
+        });
+      }
+    });
+  }
+
+  // Reset unread count when opening a chat
+  Future<void> _resetUnreadCount(String chatId) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('unread_counts')
+          .doc('counts')
+          .update({chatId: FieldValue.delete()});
+
+      setState(() {
+        _unreadMessageCounts.remove(chatId);
+      });
+
+      // Update badge count after resetting
+      int totalUnread = 0;
+      _unreadMessageCounts.forEach((key, value) {
+        if (key != chatId) {
+          totalUnread += value;
+        }
+      });
+    } catch (e) {
+      print('Error resetting unread count: $e');
+    }
+  }
+
+  // Initialize local notifications
+  Future<void> _initializeNotifications() async {
+    // Request notification permissions
+    await _requestNotificationPermissions();
+
+    // Android initialization settings with importance high for badges
+    const AndroidInitializationSettings initializationSettingsAndroid =
+    AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    // iOS initialization settings with badge permission
+    const DarwinInitializationSettings initializationSettingsIOS =
+    DarwinInitializationSettings(
+      requestSoundPermission: true,
+      requestBadgePermission: true,
+      requestAlertPermission: true,
+      defaultPresentAlert: true,
+      defaultPresentBadge: true,
+      defaultPresentSound: true,
+    );
+
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsIOS,
+    );
+
+    await flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: _onNotificationTapped,
+    );
+
+    // Create notification channel for Android with badge support
+    if (Platform.isAndroid) {
+      await _createNotificationChannel();
+    }
+
+    // Clear any existing badges on app start
+    await flutterLocalNotificationsPlugin.cancelAll();
+  }
+
+  // Request notification permissions
+  Future<void> _requestNotificationPermissions() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.notification.request();
+      if (status.isDenied) {
+        print('Notification permission denied');
+      }
+    } else if (Platform.isIOS) {
+      await flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
+          ?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    }
+  }
+
+  // Create notification channel for Android
+  Future<void> _createNotificationChannel() async {
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'chat_messages',
+      'Chat Messages',
+      description: 'Notifications for new chat messages',
+      importance: Importance.high,
+      sound: RawResourceAndroidNotificationSound('notification'),
+    );
+
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(channel);
+  }
+
+  // Handle notification tap
+  void _onNotificationTapped(NotificationResponse notificationResponse) {
+    final payload = notificationResponse.payload;
+    if (payload != null) {
+      try {
+        final data = jsonDecode(payload);
+        _navigateToChat(
+          data['chatId'],
+          data['chatName'],
+          data,
+        );
+      } catch (e) {
+        print('Error handling notification tap: $e');
+      }
+    }
+  }
+
+  // Send local notification with badge count
+  Future<void> _sendLocalNotification({
+    required String title,
+    required String body,
+    required Map<String, dynamic> payload,
+    required int badgeCount,
+  }) async {
+    try {
+      // Calculate total unread messages across all chats
+      int totalUnread = 0;
+      _unreadMessageCounts.forEach((key, value) {
+        totalUnread += value;
+      });
+
+      // Android notification with badge support
+      AndroidNotificationDetails androidPlatformChannelSpecifics =
+      AndroidNotificationDetails(
+        'chat_messages',
+        'Chat Messages',
+        channelDescription: 'Notifications for new chat messages',
+        importance: Importance.high,
+        priority: Priority.high,
+        showWhen: true,
+        enableVibration: true,
+        playSound: true,
+        icon: '@mipmap/ic_launcher',
+        color: const Color(0xFF00796B), // Teal color
+        ledColor: const Color(0xFF00796B),
+        ledOnMs: 1000,
+        ledOffMs: 500,
+        number: totalUnread, // This shows the badge count on Android
+        styleInformation: BigTextStyleInformation(
+          body,
+          contentTitle: title,
+          summaryText: totalUnread > 1 ? '$totalUnread unread messages' : null,
+        ),
+      );
+
+      // iOS notification with badge support
+      DarwinNotificationDetails iOSPlatformChannelSpecifics =
+      DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+        sound: 'default',
+        badgeNumber: totalUnread, // This sets the app icon badge on iOS
+      );
+
+      NotificationDetails platformChannelSpecifics = NotificationDetails(
+        android: androidPlatformChannelSpecifics,
+        iOS: iOSPlatformChannelSpecifics,
+      );
+
+      // Show notification even when app is in foreground for better UX
+      await flutterLocalNotificationsPlugin.show(
+        DateTime.now().millisecondsSinceEpoch.remainder(100000),
+        title,
+        body,
+        platformChannelSpecifics,
+        payload: jsonEncode(payload),
+      );
+
+      // Update app badge number
+    } catch (e) {
+      print('Error sending notification: $e');
+    }
+  }
+
 
   String _generateCustomId() {
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -87,11 +353,294 @@ class _ChatScreenState extends State<ChatScreen> {
           _currentUserCustomId = userDoc['customId'];
         });
       }
+
+      // Start listening for unread counts after getting custom ID
+      _listenForUnreadCounts();
     } catch (e) {
+      _showErrorSnackBar('Failed to initialize user ID: $e');
+    }
+  }
+
+  Future<void> _loadLastMessageTimestamps() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      final messagesSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('messages')
+          .get();
+
+      final timestamps = <String, dynamic>{};
+      for (var doc in messagesSnapshot.docs) {
+        final data = doc.data();
+        if (data['timestamp'] != null) {
+          timestamps[doc.id] = data['timestamp'];
+        }
+      }
+
+      setState(() {
+        _lastMessageTimestamps = timestamps;
+      });
+    } catch (e) {
+      print('Error loading message timestamps: $e');
+    }
+  }
+
+  void _listenForNewMessages() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('messages')
+        .snapshots()
+        .listen((snapshot) {
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added || change.type == DocumentChangeType.modified) {
+          _handleMessageChange(change.doc);
+        }
+      }
+    });
+  }
+
+  void _handleMessageChange(DocumentSnapshot messageDoc) async {
+    final data = messageDoc.data() as Map<String, dynamic>?;
+    if (data == null) return;
+
+    final messageId = messageDoc.id;
+    final currentTimestamp = data['timestamp'];
+    final lastTimestamp = _lastMessageTimestamps[messageId];
+
+    // Check if this is actually a new message
+    bool isNewMessage = false;
+
+    if (lastTimestamp == null) {
+      // First time seeing this message
+      isNewMessage = true;
+    } else if (currentTimestamp != null && lastTimestamp != null) {
+      // Compare timestamps to see if message was updated
+      if (currentTimestamp is Timestamp && lastTimestamp is Timestamp) {
+        isNewMessage = currentTimestamp.millisecondsSinceEpoch > lastTimestamp.millisecondsSinceEpoch;
+      }
+    }
+
+    // Update our local timestamp record
+    _lastMessageTimestamps[messageId] = currentTimestamp;
+
+    // Only show notification and increment unread count for genuinely new messages
+    if (isNewMessage && !_processedMessageIds.contains(messageId)) {
+      _processedMessageIds.add(messageId);
+
+      // Don't increment if message is from current user
+      if (data['senderCustomId'] != _currentUserCustomId) {
+        // Increment unread count
+        await _incrementUnreadCount(messageId);
+      }
+
+      _showNewMessageNotification(data);
+    }
+  }
+
+  // Increment unread count for a chat
+  Future<void> _incrementUnreadCount(String chatId) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('unread_counts')
+          .doc('counts')
+          .set({
+        chatId: FieldValue.increment(1)
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print('Error incrementing unread count: $e');
+    }
+  }
+
+  void _showNewMessageNotification(Map<String, dynamic> data) {
+    // Don't show notifications if the message is from the current user
+    if (data['senderCustomId'] == _currentUserCustomId) return;
+
+    final String chatId = data['groupId'] ?? data['receiverCustomId'] ?? 'Unknown';
+    final String senderName = data['senderName'] ?? data['senderCustomId'] ?? 'Unknown User';
+    final String messageType = data['type'] ?? 'text';
+
+    String notificationContent;
+    switch (messageType) {
+      case 'image':
+        notificationContent = '📷 Sent a photo';
+        break;
+      case 'file':
+        notificationContent = '📎 Sent a file: ${data['fileName'] ?? 'Unknown file'}';
+        break;
+      case 'audio':
+        notificationContent = '🎵 Sent an audio message';
+        break;
+      case 'video':
+        notificationContent = '🎥 Sent a video';
+        break;
+      default:
+        notificationContent = data['lastMessage'] ?? 'New message';
+        // Truncate long messages
+        if (notificationContent.length > 100) {
+          notificationContent = '${notificationContent.substring(0, 97)}...';
+        }
+    }
+
+    final bool isGroup = data['groupId'] != null;
+    final String chatName = isGroup
+        ? (data['groupName'] ?? 'Group $chatId')
+        : senderName;
+
+    // Prepare notification title and body
+    String notificationTitle;
+    String notificationBody;
+
+    if (isGroup) {
+      notificationTitle = chatName;
+      notificationBody = '$senderName: $notificationContent';
+    } else {
+      notificationTitle = senderName;
+      notificationBody = notificationContent;
+    }
+
+    // Get current unread count for this chat
+    int chatUnreadCount = _unreadMessageCounts[chatId] ?? 0;
+
+    // Send local notification with badge count
+    _sendLocalNotification(
+      title: notificationTitle,
+      body: notificationBody,
+      payload: {
+        'chatId': chatId,
+        'chatName': chatName,
+        'photoURL': data['photoURL'] ?? 'assets/default_avatar.png',
+        'isGroup': isGroup,
+        'senderName': senderName,
+      },
+      badgeCount: chatUnreadCount,
+    );
+
+    // Show in-app notification if app is in foreground
+    if (_isAppInForeground && mounted) {
+      // Calculate total unread for display
+      int totalUnread = 0;
+      _unreadMessageCounts.forEach((key, value) {
+        totalUnread += value;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to initialize user ID: $e'),
+          content: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      notificationTitle,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      notificationBody,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              if (chatUnreadCount > 0)
+                Container(
+                  margin: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    chatUnreadCount > 99 ? '99+' : chatUnreadCount.toString(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          backgroundColor: Colors.teal[700],
+          duration: const Duration(seconds: 4),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: Colors.white,
+            onPressed: () => _navigateToChat(chatId, chatName, data),
+          ),
+        ),
+      );
+
+      // Play notification feedback
+      _playNotificationFeedback();
+    }
+  }
+
+  void _playNotificationFeedback() {
+    // Add haptic feedback
+    HapticFeedback.lightImpact();
+
+    // Play system sound
+    SystemSound.play(SystemSoundType.click);
+  }
+
+  void _navigateToChat(String chatId, String chatName, Map<String, dynamic> data) {
+    // Reset unread count when navigating to chat
+    _resetUnreadCount(chatId);
+
+    // Navigate to the specific chat
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatMessage(
+          currentUserCustomId: _currentUserCustomId!,
+          selectedCustomId: chatId,
+          selectedUserName: chatName,
+          selectedUserPhotoURL: data['photoURL'] ?? 'assets/default_avatar.png',
+        ),
+      ),
+    );
+  }
+
+  void _showErrorSnackBar(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
           backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  void _showSuccessSnackBar(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.teal[700],
           duration: const Duration(seconds: 3),
         ),
       );
@@ -130,13 +679,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _createdGroups = groups;
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to load groups: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Failed to load groups: $e');
     }
   }
 
@@ -215,30 +758,12 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Group $groupId created successfully!'),
-          backgroundColor: Colors.teal[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showSuccessSnackBar('Group $groupId created successfully!');
 
       Clipboard.setData(ClipboardData(text: groupId));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Group ID $groupId copied to clipboard'),
-          backgroundColor: Colors.teal[700],
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      _showSuccessSnackBar('Group ID $groupId copied to clipboard');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to create group: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Failed to create group: $e');
     }
   }
 
@@ -251,13 +776,7 @@ class _ChatScreenState extends State<ChatScreen> {
         .doc(groupId)
         .get();
     if (!groupDoc.exists || groupDoc['creatorId'] != currentUser.uid) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Only the group creator can modify group details'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Only the group creator can modify group details');
       return;
     }
 
@@ -351,22 +870,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   }
                 });
 
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Group details updated successfully'),
-                    backgroundColor: Colors.teal[700],
-                    duration: const Duration(seconds: 3),
-                  ),
-                );
+                _showSuccessSnackBar('Group details updated successfully');
                 Navigator.pop(context);
               } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Failed to update group: $e'),
-                    backgroundColor: Colors.red[700],
-                    duration: const Duration(seconds: 3),
-                  ),
-                );
+                _showErrorSnackBar('Failed to update group: $e');
               }
             },
             child: const Text('Save'),
@@ -385,13 +892,7 @@ class _ChatScreenState extends State<ChatScreen> {
         .doc(groupId)
         .get();
     if (!groupDoc.exists || groupDoc['creatorId'] != currentUser.uid) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Only the group creator can delete the group'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Only the group creator can delete the group');
       return;
     }
 
@@ -471,51 +972,10 @@ class _ChatScreenState extends State<ChatScreen> {
         _createdGroups.removeWhere((group) => group['groupId'] == groupId);
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Group $groupId deleted successfully'),
-          backgroundColor: Colors.teal[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showSuccessSnackBar('Group $groupId deleted successfully');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to delete group: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Failed to delete group: $e');
     }
-  }
-
-  void _listenForNewMessages() {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return;
-
-    FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUser.uid)
-        .collection('messages')
-        .snapshots()
-        .listen((snapshot) {
-      for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added || change.type == DocumentChangeType.modified) {
-          final data = change.doc.data();
-          if (data != null && data['groupId'] != null) {
-            final sender = data['senderCustomId'];
-            final content = data['type'] == 'file' ? 'Sent a file: ${data['fileName']}' : data['lastMessage'];
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('New message in group ${data['groupId']}: $content from $sender'),
-                backgroundColor: Colors.teal[700],
-                duration: const Duration(seconds: 3),
-              ),
-            );
-          }
-        }
-      }
-    });
   }
 
   Future<void> _addChat(String customId, String name, String photoURL, {bool isGroup = false}) async {
@@ -550,13 +1010,7 @@ class _ChatScreenState extends State<ChatScreen> {
         transaction.set(chatDocRef, {'users': updatedChatList}, SetOptions(merge: true));
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to add chat: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Failed to add chat: $e');
     }
   }
 
@@ -571,13 +1025,7 @@ class _ChatScreenState extends State<ChatScreen> {
           .get();
 
       if (!groupDoc.exists) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Group $groupId does not exist'),
-            backgroundColor: Colors.red[700],
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        _showErrorSnackBar('Group $groupId does not exist');
         return;
       }
 
@@ -626,13 +1074,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Joined group $groupId successfully!'),
-          backgroundColor: Colors.teal[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showSuccessSnackBar('Joined group $groupId successfully!');
 
       Navigator.push(
         context,
@@ -646,13 +1088,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to join group: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Failed to join group: $e');
     }
   }
 
@@ -714,13 +1150,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to load group members: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Failed to load group members: $e');
     }
   }
 
@@ -755,13 +1185,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _searchResults = userDocs.values.toList();
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Search failed: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Search failed: $e');
     }
   }
 
@@ -783,26 +1207,14 @@ class _ChatScreenState extends State<ChatScreen> {
         _groupSearchResults = groupResult.docs;
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Group search failed: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Group search failed: $e');
     }
   }
 
   void _copyCustomId() {
     if (_currentUserCustomId != null) {
       Clipboard.setData(ClipboardData(text: _currentUserCustomId!));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('ID $_currentUserCustomId copied to clipboard'),
-          backgroundColor: Colors.teal[700],
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      _showSuccessSnackBar('ID $_currentUserCustomId copied to clipboard');
     }
   }
 
@@ -811,39 +1223,21 @@ class _ChatScreenState extends State<ChatScreen> {
       try {
         await Share.share('My Chat ID: $_currentUserCustomId');
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to share ID: $e'),
-            backgroundColor: Colors.red[700],
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        _showErrorSnackBar('Failed to share ID: $e');
       }
     }
   }
 
   void _copyGroupId(String groupId) {
     Clipboard.setData(ClipboardData(text: groupId));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Group ID $groupId copied to clipboard'),
-        backgroundColor: Colors.teal[700],
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    _showSuccessSnackBar('Group ID $groupId copied to clipboard');
   }
 
   void _shareGroupId(String groupId) async {
     try {
       await Share.share('Join my group chat! Group ID: $groupId');
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to share group ID: $e'),
-          backgroundColor: Colors.red[700],
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _showErrorSnackBar('Failed to share group ID: $e');
     }
   }
 
@@ -1217,6 +1611,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       itemBuilder: (context, index) {
                         final chat = chatList[index];
                         final isGroup = chat['isGroup'] ?? false;
+                        final chatId = chat['customId'];
+                        final unreadCount = _unreadMessageCounts[chatId] ?? 0;
+
                         return Card(
                           elevation: 4,
                           shape: RoundedRectangleBorder(
@@ -1225,21 +1622,56 @@ class _ChatScreenState extends State<ChatScreen> {
                           color: Colors.white.withOpacity(0.95),
                           margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
                           child: ListTile(
-                            leading: CircleAvatar(
-                              backgroundImage: chat['photoURL'].startsWith('assets/')
-                                  ? AssetImage(chat['photoURL']) as ImageProvider
-                                  : (chat['photoURL'].startsWith('data:image')
-                                  ? MemoryImage(base64Decode(chat['photoURL'].split(',')[1]))
-                                  : NetworkImage(chat['photoURL'])) as ImageProvider,
-                              radius: 20,
-                              onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
+                            leading: Stack(
+                              children: [
+                                CircleAvatar(
+                                  backgroundImage: chat['photoURL'].startsWith('assets/')
+                                      ? AssetImage(chat['photoURL']) as ImageProvider
+                                      : (chat['photoURL'].startsWith('data:image')
+                                      ? MemoryImage(base64Decode(chat['photoURL'].split(',')[1]))
+                                      : NetworkImage(chat['photoURL'])) as ImageProvider,
+                                  radius: 20,
+                                  onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
+                                ),
+                                // Unread message badge
+                                if (unreadCount > 0)
+                                  Positioned(
+                                    right: -2,
+                                    top: -2,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: Colors.white,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      constraints: const BoxConstraints(
+                                        minWidth: 20,
+                                        minHeight: 20,
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          unreadCount > 99 ? '99+' : unreadCount.toString(),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                             title: Text(
                               chat['name'],
                               style: TextStyle(
                                 color: Colors.teal[900],
                                 fontSize: 18,
-                                fontWeight: FontWeight.w600,
+                                fontWeight: unreadCount > 0 ? FontWeight.w700 : FontWeight.w600,
                               ),
                             ),
                             subtitle: isGroup
@@ -1268,6 +1700,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               ),
                             ),
                             onTap: () {
+                              // Reset unread count when opening chat
+                              _resetUnreadCount(chatId);
+
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(

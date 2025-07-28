@@ -71,6 +71,7 @@ dependencies:
   open_file: ^3.3.2
   agora_rtc_engine: ^6.2.0
   flutter_draggable_gridview: ^0.0.13
+  flutter_webrtc: ^1.0.0
   flutter_local_notifications: 17.2.2
   timezone: 0.9.4
 

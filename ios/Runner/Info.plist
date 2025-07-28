@@ -2,8 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSCameraUsageDescription</key>
+    <string>App needs camera access for video calls</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>We need microphone access for voice chat.</string>
+    <string>App needs microphone access for voice calls</string>
+    <key>UIBackgroundModes</key>
+    <array>
+       <string>fetch</string>
+       <string>remote-notification</string>
+    </array>
+    <key>UILocalNotificationDefaultSoundName</key>
+    <string>notification.aiff</string>
+    <key>NSUserNotificationAlertStyle</key>
+    <string>alert</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
