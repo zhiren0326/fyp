@@ -7,11 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fyp/Splah/splash_screen.dart';
 import 'package:fyp/firebase_options.dart';
+import 'package:fyp/module/ActivityLog.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/data/latest.dart' as tz;
-import 'Notification Module/HybridNotificationService.dart';
-import 'Notification Module/PopupNotificationManager.dart';
+
+import 'Notification Module/NotificationService.dart';
+
 
 bool? seenOnboard;
 bool _isFirebaseInitialized = false;
@@ -19,8 +20,7 @@ bool _allowDataSharing = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  tz.initializeTimeZones();
+  await NotificationService().initialize();
 
   // Initialize Firebase
   try {
@@ -30,8 +30,6 @@ Future<void> main() async {
     print('Firebase initialization failed: $e');
     _isFirebaseInitialized = false;
   }
-
-  await HybridNotificationService().initialize();
 
   // Initialize Firebase Analytics
   FirebaseAnalytics analytics = FirebaseAnalytics.instance;
@@ -67,6 +65,19 @@ class MyApp extends StatelessWidget {
     return FirebaseAuth.instance.currentUser?.uid;
   }
 
+  void _initializeNotifications() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      // Start monitoring tasks and status changes
+      NotificationService().startTaskMonitoring();
+      NotificationService().startStatusMonitoring(currentUser.uid);
+
+      // Schedule daily and weekly summaries
+      NotificationService().scheduleDailySummary();
+      NotificationService().scheduleWeeklySummary();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -78,7 +89,7 @@ class MyApp extends StatelessWidget {
         ),
         primarySwatch: Colors.blue,
       ),
-      home: const SplashScreen(),
+      home: AuthWrapper(),
       navigatorObservers: [
         AnalyticsNavigatorObserver(
           analytics: analytics,
@@ -140,41 +151,29 @@ class AnalyticsNavigatorObserver extends NavigatorObserver {
     }
   }
 }
-class AppWithNotifications extends StatefulWidget {
-  final Widget child;
 
-  const AppWithNotifications({super.key, required this.child});
-
-  @override
-  State<AppWithNotifications> createState() => _AppWithNotificationsState();
-}
-
-class _AppWithNotificationsState extends State<AppWithNotifications> {
-  late NotificationAppLifecycleManager _lifecycleManager;
-
-  @override
-  void initState() {
-    super.initState();
-
-    // Initialize lifecycle manager
-    _lifecycleManager = NotificationAppLifecycleManager();
-    _lifecycleManager.initialize();
-
-    // Initialize popup notification manager
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      PopupNotificationManager().initialize(context);
-    });
-  }
-
-  @override
-  void dispose() {
-    _lifecycleManager.dispose();
-    PopupNotificationManager().dispose();
-    super.dispose();
-  }
-
+class AuthWrapper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return widget.child;
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasData) {
+          // User is logged in, initialize notifications
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            NotificationService().startTaskMonitoring();
+            NotificationService().startStatusMonitoring(snapshot.data!.uid);
+          });
+
+          return SplashScreen();
+        } else {
+          return SplashScreen();
+        }
+      },
+    );
   }
 }

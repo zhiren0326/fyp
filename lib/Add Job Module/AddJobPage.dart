@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
+import '../Notification Module/NotificationService.dart';
 import 'LocationPickerPage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -19,12 +20,12 @@ class AddJobPage extends StatefulWidget {
 class _AddJobPageState extends State<AddJobPage> {
   bool isShortTerm = true;
   bool isRecurring = false;
+  bool isTimeBlocked = false;
 
   // Task Management additions
   String selectedPriority = 'Medium';
   List<String> taskDependencies = [];
   List<String> availableTasks = [];
-  bool isTimeBlocked = false;
 
   final Map<String, TextEditingController> controllers = {
     'Job position*': TextEditingController(),
@@ -67,23 +68,21 @@ class _AddJobPageState extends State<AddJobPage> {
 
   void _populateFromInitialData() {
     final data = widget.initialData!;
-    controllers['Job position*']!.text = data['jobPosition'] ?? '';
-    controllers['Type of workplace*']!.text = data['workplaceType'] ?? '';
-    controllers['Job location*']!.text = data['location'] ?? '';
-    controllers['Employer/Company Name*']!.text = data['employerName'] ?? '';
-    controllers['Employment type*']!.text = data['employmentType'] ?? '';
-    controllers['Salary (RM)*']!.text = data['salary']?.toString() ?? '';
-    controllers['Description']!.text = data['description'] ?? '';
-    controllers['Required Skill*']!.text =
-        data['requiredSkill']?.toString() ?? '';
-    controllers['Start date*']!.text = data['startDate'] ?? '';
-    controllers['Start time*']!.text = data['startTime'] ?? '';
-    controllers['End date*']!.text = data['endDate'] ?? '';
-    controllers['End time*']!.text = data['endTime'] ?? '';
-    controllers['Recurring Tasks']!.text = data['recurringTasks'] ?? '';
-    controllers['Required People*']!.text =
-        data['requiredPeople']?.toString() ?? '1';
-    controllers['Task Notes']!.text = data['taskNotes'] ?? '';
+    controllers['Job position*']?.text = data['jobPosition'] ?? '';
+    controllers['Type of workplace*']?.text = data['workplaceType'] ?? '';
+    controllers['Job location*']?.text = data['location'] ?? '';
+    controllers['Employer/Company Name*']?.text = data['employerName'] ?? '';
+    controllers['Employment type*']?.text = data['employmentType'] ?? '';
+    controllers['Salary (RM)*']?.text = data['salary']?.toString() ?? '';
+    controllers['Description']?.text = data['description'] ?? '';
+    controllers['Required Skill*']?.text = data['requiredSkill']?.toString() ?? '';
+    controllers['Start date*']?.text = data['startDate'] ?? '';
+    controllers['Start time*']?.text = data['startTime'] ?? '';
+    controllers['End date*']?.text = data['endDate'] ?? '';
+    controllers['End time*']?.text = data['endTime'] ?? '';
+    controllers['Recurring Tasks']?.text = data['recurringTasks'] ?? '';
+    controllers['Required People*']?.text = data['requiredPeople']?.toString() ?? '1';
+    controllers['Task Notes']?.text = data['taskNotes'] ?? '';
 
     // Task management fields
     isShortTerm = data['isShortTerm'] ?? true;
@@ -93,7 +92,7 @@ class _AddJobPageState extends State<AddJobPage> {
     isTimeBlocked = data['isTimeBlocked'] ?? false;
 
     visibleInputs.addAll(
-        controllers.keys.where((key) => controllers[key]!.text.isNotEmpty));
+        controllers.keys.where((key) => (controllers[key]?.text ?? '').isNotEmpty));
   }
 
   Future<void> _loadAvailableTasks() async {
@@ -150,7 +149,7 @@ class _AddJobPageState extends State<AddJobPage> {
     }
 
     final startDateTime = _parseDateTime(
-        controllers['Start date*']!.text, controllers['Start time*']!.text);
+        controllers['Start date*']?.text ?? '', controllers['Start time*']?.text ?? '');
     if (startDateTime != null && startDateTime.isBefore(DateTime.now())) {
       _showSnackBar('Start date and time cannot be in the past.');
       return;
@@ -158,7 +157,7 @@ class _AddJobPageState extends State<AddJobPage> {
 
     if (isShortTerm) {
       final endDateTime = _parseDateTime(
-          controllers['End date*']!.text, controllers['End time*']!.text);
+          controllers['End date*']?.text ?? '', controllers['End time*']?.text ?? '');
       if (startDateTime == null || endDateTime == null ||
           startDateTime.isAfter(endDateTime)) {
         _showSnackBar(
@@ -168,7 +167,7 @@ class _AddJobPageState extends State<AddJobPage> {
     }
 
     final requiredPeople = int.tryParse(
-        controllers['Required People*']!.text) ?? 1;
+        controllers['Required People*']?.text ?? '1') ?? 1;
     if (requiredPeople < 1) {
       _showSnackBar('Required people must be at least 1.');
       return;
@@ -194,6 +193,19 @@ class _AddJobPageState extends State<AddJobPage> {
 
         // Create task progress tracking
         await _createTaskProgress(docRef.id);
+
+        // Schedule deadline reminders if it's a short-term job
+        if (isShortTerm) {
+          final endDateTime = _parseDateTime(
+              controllers['End date*']?.text ?? '', controllers['End time*']?.text ?? '');
+          if (endDateTime != null) {
+            await NotificationService().scheduleDeadlineReminders(
+              taskId: docRef.id,
+              taskTitle: controllers['Job position*']?.text ?? 'Task',
+              deadline: endDateTime,
+            );
+          }
+        }
       }
 
       // Log activity
@@ -209,37 +221,33 @@ class _AddJobPageState extends State<AddJobPage> {
 
   Map<String, dynamic> _buildJobData(String userId, int requiredPeople) {
     return {
-      'jobPosition': controllers['Job position*']!.text,
-      'workplaceType': controllers['Type of workplace*']!.text,
-      'location': controllers['Job location*']!.text,
-      'employerName': controllers['Employer/Company Name*']!.text,
-      'employmentType': controllers['Employment type*']!.text,
-      'salary': int.tryParse(controllers['Salary (RM)*']!.text) ?? 0,
-      'description': controllers['Description']!.text,
-      'requiredSkill': controllers['Required Skill*']!.text.split(',').map((
-          s) => s.trim()).toList(),
-      'startDate': controllers['Start date*']!.text,
-      'startTime': isShortTerm ? controllers['Start time*']!.text : null,
-      'endDate': isShortTerm ? controllers['End date*']!.text : null,
-      'endTime': isShortTerm ? controllers['End time*']!.text : null,
+      'jobPosition': controllers['Job position*']?.text ?? '',
+      'workplaceType': controllers['Type of workplace*']?.text ?? '',
+      'location': controllers['Job location*']?.text ?? '',
+      'employerName': controllers['Employer/Company Name*']?.text ?? '',
+      'employmentType': controllers['Employment type*']?.text ?? '',
+      'salary': int.tryParse(controllers['Salary (RM)*']?.text ?? '0') ?? 0,
+      'description': controllers['Description']?.text ?? '',
+      'requiredSkill': (controllers['Required Skill*']?.text ?? '').split(',').map((s) => s.trim()).toList(),
+      'startDate': controllers['Start date*']?.text ?? '',
+      'startTime': isShortTerm ? controllers['Start time*']?.text : null,
+      'endDate': isShortTerm ? controllers['End date*']?.text : null,
+      'endTime': isShortTerm ? controllers['End time*']?.text : null,
       'recurring': isRecurring,
-      'recurringTasks': isRecurring
-          ? controllers['Recurring Tasks']!.text
-          : null,
+      'recurringTasks': isRecurring ? controllers['Recurring Tasks']?.text : null,
       'isShortTerm': isShortTerm,
       'requiredPeople': requiredPeople,
       'applicants': [],
       'acceptedApplicants': [],
       'isCompleted': false,
-      'postedAt': widget.jobId == null ? Timestamp.now() : FieldValue
-          .serverTimestamp(),
+      'postedAt': widget.jobId == null ? Timestamp.now() : FieldValue.serverTimestamp(),
       'postedBy': userId,
 
       // Task Management additions
       'priority': selectedPriority,
       'dependencies': taskDependencies,
       'isTimeBlocked': isTimeBlocked,
-      'taskNotes': controllers['Task Notes']!.text,
+      'taskNotes': controllers['Task Notes']?.text ?? '',
       'progressPercentage': 0,
       'milestones': [],
       'estimatedDuration': _calculateEstimatedDuration(),
@@ -249,19 +257,19 @@ class _AddJobPageState extends State<AddJobPage> {
   }
 
   bool _validateDeadlines() {
-    if (controllers['Start date*']!.text.isEmpty) {
+    if ((controllers['Start date*']?.text ?? '').isEmpty) {
       _showSnackBar('Start date is required.');
       return false;
     }
 
-    final startDate = DateTime.tryParse(controllers['Start date*']!.text);
+    final startDate = DateTime.tryParse(controllers['Start date*']?.text ?? '');
     if (startDate == null) {
       _showSnackBar('Invalid start date format.');
       return false;
     }
 
-    if (isShortTerm && controllers['End date*']!.text.isNotEmpty) {
-      final endDate = DateTime.tryParse(controllers['End date*']!.text);
+    if (isShortTerm && (controllers['End date*']?.text ?? '').isNotEmpty) {
+      final endDate = DateTime.tryParse(controllers['End date*']?.text ?? '');
       if (endDate == null) {
         _showSnackBar('Invalid end date format.');
         return false;
@@ -278,13 +286,11 @@ class _AddJobPageState extends State<AddJobPage> {
   int _calculateEstimatedDuration() {
     if (!isShortTerm) return 0;
 
-    final startDate = DateTime.tryParse(controllers['Start date*']!.text);
-    final endDate = DateTime.tryParse(controllers['End date*']!.text);
+    final startDate = DateTime.tryParse(controllers['Start date*']?.text ?? '');
+    final endDate = DateTime.tryParse(controllers['End date*']?.text ?? '');
 
     if (startDate != null && endDate != null) {
-      return endDate
-          .difference(startDate)
-          .inDays;
+      return endDate.difference(startDate).inDays;
     }
     return 0;
   }
@@ -292,31 +298,27 @@ class _AddJobPageState extends State<AddJobPage> {
   List<Map<String, dynamic>> _createDeadlineReminders() {
     List<Map<String, dynamic>> reminders = [];
 
-    if (controllers['Start date*']!.text.isNotEmpty) {
-      final startDate = DateTime.tryParse(controllers['Start date*']!.text);
+    if ((controllers['Start date*']?.text ?? '').isNotEmpty) {
+      final startDate = DateTime.tryParse(controllers['Start date*']?.text ?? '');
       if (startDate != null) {
         // Add reminder 1 day before start
         reminders.add({
           'type': 'start_reminder',
-          'reminderDate': startDate.subtract(const Duration(days: 1))
-              .toIso8601String(),
-          'message': 'Task "${controllers['Job position*']!
-              .text}" starts tomorrow',
+          'reminderDate': startDate.subtract(const Duration(days: 1)).toIso8601String(),
+          'message': 'Task "${controllers['Job position*']?.text ?? 'Task'}" starts tomorrow',
           'sent': false,
         });
       }
     }
 
-    if (isShortTerm && controllers['End date*']!.text.isNotEmpty) {
-      final endDate = DateTime.tryParse(controllers['End date*']!.text);
+    if (isShortTerm && (controllers['End date*']?.text ?? '').isNotEmpty) {
+      final endDate = DateTime.tryParse(controllers['End date*']?.text ?? '');
       if (endDate != null) {
         // Add reminder 1 day before deadline
         reminders.add({
           'type': 'deadline_reminder',
-          'reminderDate': endDate.subtract(const Duration(days: 1))
-              .toIso8601String(),
-          'message': 'Task "${controllers['Job position*']!
-              .text}" deadline is tomorrow',
+          'reminderDate': endDate.subtract(const Duration(days: 1)).toIso8601String(),
+          'message': 'Task "${controllers['Job position*']?.text ?? 'Task'}" deadline is tomorrow',
           'sent': false,
         });
       }
@@ -334,7 +336,7 @@ class _AddJobPageState extends State<AddJobPage> {
           .doc(jobId)
           .set({
         'taskId': jobId,
-        'taskTitle': controllers['Job position*']!.text,
+        'taskTitle': controllers['Job position*']?.text ?? 'Task',
         'currentProgress': 0,
         'milestones': [],
         'createdAt': Timestamp.now(),
@@ -354,7 +356,7 @@ class _AddJobPageState extends State<AddJobPage> {
           .collection('taskProgress')
           .doc(jobId)
           .update({
-        'taskTitle': controllers['Job position*']!.text,
+        'taskTitle': controllers['Job position*']?.text ?? 'Task',
         'lastUpdated': Timestamp.now(),
         'status': 'updated',
       });
@@ -372,7 +374,7 @@ class _AddJobPageState extends State<AddJobPage> {
           .add({
         'action': action,
         'taskId': taskId,
-        'taskTitle': controllers['Job position*']!.text,
+        'taskTitle': controllers['Job position*']?.text ?? 'Task',
         'timestamp': Timestamp.now(),
         'details': {
           'priority': selectedPriority,
@@ -387,6 +389,8 @@ class _AddJobPageState extends State<AddJobPage> {
 
   DateTime? _parseDateTime(String dateStr, String timeStr) {
     try {
+      if (dateStr.isEmpty || timeStr.isEmpty) return null;
+
       final dateParts = dateStr.split('-');
       if (dateParts.length != 3) return null;
       final timeParts = timeStr.split(':');
@@ -398,8 +402,7 @@ class _AddJobPageState extends State<AddJobPage> {
       final month = int.parse(dateParts[1]);
       final day = int.parse(dateParts[2]);
 
-      final period = timeStr.contains('PM') && hour != 12 ? 12 : (timeStr
-          .contains('AM') && hour == 12 ? -12 : 0);
+      final period = timeStr.contains('PM') && hour != 12 ? 12 : (timeStr.contains('AM') && hour == 12 ? -12 : 0);
       final adjustedHour = (hour + period) % 24;
 
       return DateTime(year, month, day, adjustedHour, minute);
@@ -427,9 +430,7 @@ class _AddJobPageState extends State<AddJobPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 3))
+          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
         ],
       ),
       child: Column(
@@ -454,16 +455,14 @@ class _AddJobPageState extends State<AddJobPage> {
                     decoration: BoxDecoration(
                       color: isSelected ? priorityColor : Colors.grey[200],
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: priorityColor,
-                          width: isSelected ? 2 : 1),
+                      border: Border.all(color: priorityColor, width: isSelected ? 2 : 1),
                     ),
                     child: Text(
                       priority,
                       textAlign: TextAlign.center,
                       style: GoogleFonts.poppins(
                         color: isSelected ? Colors.white : priorityColor,
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight
-                            .normal,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                         fontSize: 12,
                       ),
                     ),
@@ -500,9 +499,7 @@ class _AddJobPageState extends State<AddJobPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 3))
+          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
         ],
       ),
       child: Column(
@@ -527,12 +524,9 @@ class _AddJobPageState extends State<AddJobPage> {
               spacing: 8,
               children: taskDependencies.map((dependency) {
                 return Chip(
-                  label: Text(
-                      dependency, style: GoogleFonts.poppins(fontSize: 12)),
+                  label: Text(dependency, style: GoogleFonts.poppins(fontSize: 12)),
                   deleteIcon: const Icon(Icons.close, size: 16),
-                  onDeleted: () =>
-                      setState(() =>
-                          taskDependencies.remove(dependency)),
+                  onDeleted: () => setState(() => taskDependencies.remove(dependency)),
                   backgroundColor: const Color(0xFFB2DFDB),
                 );
               }).toList(),
@@ -546,43 +540,44 @@ class _AddJobPageState extends State<AddJobPage> {
   void _showDependencySelector() {
     showDialog(
       context: context,
-      builder: (context) =>
-          AlertDialog(
-            title: const Text('Select Dependencies'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: availableTasks.map((task) {
-                  final isSelected = taskDependencies.contains(task);
-                  return CheckboxListTile(
-                    title: Text(task),
-                    value: isSelected,
-                    onChanged: (bool? value) {
-                      setState(() {
-                        if (value == true && !taskDependencies.contains(task)) {
-                          taskDependencies.add(task);
-                        } else if (value == false) {
-                          taskDependencies.remove(task);
-                        }
-                      });
-                      Navigator.pop(context);
-                    },
-                  );
-                }).toList(),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Done'),
-              ),
-            ],
+      builder: (context) => AlertDialog(
+        title: const Text('Select Dependencies'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: availableTasks.map((task) {
+              final isSelected = taskDependencies.contains(task);
+              return CheckboxListTile(
+                title: Text(task),
+                value: isSelected,
+                onChanged: (bool? value) {
+                  setState(() {
+                    if (value == true && !taskDependencies.contains(task)) {
+                      taskDependencies.add(task);
+                    } else if (value == false) {
+                      taskDependencies.remove(task);
+                    }
+                  });
+                  Navigator.pop(context);
+                },
+              );
+            }).toList(),
           ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildDropdownField(String label, List<String> options) {
-    final controller = controllers[label]!;
+    final controller = controllers[label];
+    if (controller == null) return const SizedBox.shrink();
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -590,9 +585,7 @@ class _AddJobPageState extends State<AddJobPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 3))
+          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
         ],
       ),
       child: Column(
@@ -614,8 +607,7 @@ class _AddJobPageState extends State<AddJobPage> {
               border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide: BorderSide.none),
-              contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             ),
             dropdownColor: Colors.white,
             icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF006D77)),
@@ -626,7 +618,9 @@ class _AddJobPageState extends State<AddJobPage> {
   }
 
   Widget _buildDateTimePicker(String label, bool isDate) {
-    final controller = controllers[label]!;
+    final controller = controllers[label];
+    if (controller == null) return const SizedBox.shrink();
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -634,9 +628,7 @@ class _AddJobPageState extends State<AddJobPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 3))
+          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
         ],
       ),
       child: Column(
@@ -654,13 +646,11 @@ class _AddJobPageState extends State<AddJobPage> {
               final result = isDate
                   ? await showDatePicker(
                 context: context,
-                initialDate: controller.text.isNotEmpty ? DateTime.parse(
-                    controller.text) : now,
+                initialDate: controller.text.isNotEmpty ? DateTime.parse(controller.text) : now,
                 firstDate: now,
                 lastDate: DateTime(2100),
               )
-                  : await showTimePicker(
-                  context: context, initialTime: TimeOfDay.now());
+                  : await showTimePicker(context: context, initialTime: TimeOfDay.now());
               if (result != null) {
                 final formatted = isDate
                     ? (result as DateTime).toLocal().toString().split(" ")[0]
@@ -675,10 +665,8 @@ class _AddJobPageState extends State<AddJobPage> {
               border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide: BorderSide.none),
-              contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 10),
-              suffixIcon: const Icon(
-                  Icons.calendar_today, color: Color(0xFF006D77)),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              suffixIcon: const Icon(Icons.calendar_today, color: Color(0xFF006D77)),
             ),
           ),
         ],
@@ -687,7 +675,9 @@ class _AddJobPageState extends State<AddJobPage> {
   }
 
   Widget _buildFieldTile(String label) {
-    final controller = controllers[label]!;
+    final controller = controllers[label];
+    if (controller == null) return const SizedBox.shrink();
+
     final isVisible = visibleInputs.contains(label);
     final hasText = controller.text.isNotEmpty;
     final isSalaryField = label == 'Salary (RM)*';
@@ -700,9 +690,7 @@ class _AddJobPageState extends State<AddJobPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 3))
+          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
         ],
       ),
       child: Column(
@@ -718,18 +706,16 @@ class _AddJobPageState extends State<AddJobPage> {
                     color: const Color(0xFF006D77)),
               ),
               IconButton(
-                icon: Icon(hasText ? Icons.edit : Icons.add,
-                    color: const Color(0xFF006D77)),
+                icon: Icon(hasText ? Icons.edit : Icons.add, color: const Color(0xFF006D77)),
                 onPressed: () async {
                   if (label == 'Job location*') {
                     final selected = await Navigator.push(
                       context,
-                      MaterialPageRoute(
-                          builder: (_) => const LocationPickerPage()),
+                      MaterialPageRoute(builder: (_) => const LocationPickerPage()),
                     );
                     if (selected != null && selected is String) {
                       setState(() {
-                        controllers[label]!.text = selected;
+                        controller.text = selected;
                         visibleInputs.add(label);
                       });
                     }
@@ -760,8 +746,7 @@ class _AddJobPageState extends State<AddJobPage> {
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
                     borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               ),
             ),
           ],
@@ -773,13 +758,10 @@ class _AddJobPageState extends State<AddJobPage> {
   bool _isFormValid() {
     for (var entry in controllers.entries) {
       final isRequired = entry.key.endsWith('*');
-      final isTimeField = entry.key == 'Start time*' ||
-          entry.key == 'End time*';
+      final isTimeField = entry.key == 'Start time*' || entry.key == 'End time*';
       if (!isRequired) continue;
       if (!isShortTerm && (entry.key == 'End date*' || isTimeField)) continue;
-      if (entry.value.text
-          .trim()
-          .isEmpty) {
+      if ((entry.value.text).trim().isEmpty) {
         print('Missing required field: ${entry.key}');
         return false;
       }
@@ -796,20 +778,16 @@ class _AddJobPageState extends State<AddJobPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1),
-              blurRadius: 6,
-              offset: const Offset(0, 3))
+          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
         ],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: GoogleFonts.poppins(fontSize: 14,
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w600,
               color: const Color(0xFF006D77))),
-          Switch(value: value,
-              onChanged: onChanged,
-              activeColor: const Color(0xFF006D77)),
+          Switch(value: value, onChanged: onChanged, activeColor: const Color(0xFF006D77)),
         ],
       ),
     );
@@ -864,24 +842,6 @@ class _AddJobPageState extends State<AddJobPage> {
                     color: const Color(0xFF006D77)),
               ),
               const SizedBox(height: 16),
-              _buildSwitchRow(
-                label: isShortTerm
-                    ? 'Job Type: Short-term'
-                    : 'Job Type: Long-term',
-                value: isShortTerm,
-                onChanged: (val) => setState(() => isShortTerm = val),
-              ),
-              _buildSwitchRow(
-                label: 'Recurring task',
-                value: isRecurring,
-                onChanged: (val) => setState(() => isRecurring = val),
-              ),
-              _buildSwitchRow(
-                label: 'Time Blocking',
-                value: isTimeBlocked,
-                onChanged: (val) => setState(() => isTimeBlocked = val),
-              ),
-              const SizedBox(height: 16),
               Expanded(
                 child: ListView(
                   children: [
@@ -892,7 +852,22 @@ class _AddJobPageState extends State<AddJobPage> {
                     _buildDropdownField('Employment type*', employmentOptions),
                     _buildFieldTile('Salary (RM)*'),
                     _buildFieldTile('Required Skill*'),
-                    _buildFieldTile('Description (Optional)'),
+                    _buildFieldTile('Description'),
+                    _buildSwitchRow(
+                      label: isShortTerm ? 'Job Type: Short-term' : 'Job Type: Long-term',
+                      value: isShortTerm,
+                      onChanged: (val) => setState(() => isShortTerm = val),
+                    ),
+                    _buildSwitchRow(
+                      label: 'Recurring Task',
+                      value: isRecurring,
+                      onChanged: (val) => setState(() => isRecurring = val),
+                    ),
+                    _buildSwitchRow(
+                      label: 'Time Blocking',
+                      value: isTimeBlocked,
+                      onChanged: (val) => setState(() => isTimeBlocked = val),
+                    ),
                     _buildPrioritySelector(),
                     _buildDependenciesSelector(),
                     _buildDateTimePicker('Start date*', true),

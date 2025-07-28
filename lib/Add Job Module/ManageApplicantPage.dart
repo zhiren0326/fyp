@@ -143,8 +143,12 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
       // Create initial task progress tracker for the accepted applicant
       await _createTaskProgressForApplicant(applicantId);
 
-      // Send acceptance notification
-      await _sendAcceptanceNotification(applicantId);
+      // Send local notification to the accepted applicant
+      await NotificationService().notifyTaskStatusChanged(
+        taskTitle: widget.jobPosition,
+        newStatus: 'Accepted',
+        taskId: widget.jobId,
+      );
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Applicant accepted successfully')),
@@ -304,12 +308,12 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
     double totalProgress = teamPerformanceData.fold(0.0, (sum, item) => sum + item['progress']);
     double avgProgress = totalProgress / teamPerformanceData.length;
 
+    // Send progress notifications to team members
     for (var member in teamPerformanceData) {
-      await NotificationService().sendProgressNotification(
-        userId: member['userId'],
+      await NotificationService().notifyProgressUpdate(
         taskTitle: widget.jobPosition,
-        taskId: widget.jobId,
         progressPercentage: member['progress'],
+        taskId: widget.jobId,
       );
     }
 
