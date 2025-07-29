@@ -1,10 +1,11 @@
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fyp/Add%20Job%20Module/JobDetailPage.dart';
 import '../Notification Module/NotificationService.dart';
-import 'TaskProgressTracker.dart';
+import 'TaskProgressTrackerDetail.dart'; // Ensure this import is correct
 
 class ManageApplicantsPage extends StatefulWidget {
   final String jobId;
@@ -350,7 +351,7 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => TaskProgressTracker(
+        builder: (context) => TaskProgressTrackerDetail(
           taskId: widget.jobId,
           taskTitle: '${widget.jobPosition} - $applicantName',
         ),
@@ -799,7 +800,7 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => TaskProgressTracker(
+                builder: (context) => TaskProgressTrackerDetail(
                   taskId: widget.jobId,
                   taskTitle: widget.jobPosition,
                 ),
