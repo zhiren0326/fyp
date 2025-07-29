@@ -11,6 +11,10 @@
        <string>fetch</string>
        <string>remote-notification</string>
     </array>
+     <key>NSSpeechRecognitionUsageDescription</key>
+        <string>This app needs access to speech recognition to translate voice messages.</string>
+     <key>NSMicrophoneUsageDescription</key>
+        <string>This app needs access to microphone to record and translate voice messages.</string>
     <key>UILocalNotificationDefaultSoundName</key>
     <string>notification.aiff</string>
     <key>NSUserNotificationAlertStyle</key>

@@ -100,24 +100,31 @@ class _FullPrivacyPolicyPageState extends State<FullPrivacyPolicyPage> with Sing
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.transparent,
         leading: GestureDetector(
-          onTapDown: (_) {
-            _controller.reverse();
-          },
+          onTapDown: (_) => _controller.reverse(),
           onTapUp: (_) {
             _controller.forward();
             Navigator.pop(context);
           },
-          onTapCancel: () {
-            _controller.forward();
-          },
+          onTapCancel: () => _controller.forward(),
           child: AnimatedBuilder(
             animation: _scaleAnimation,
             builder: (context, child) {
               return Transform.scale(
                 scale: _scaleAnimation.value,
-                child: const Icon(Icons.arrow_back, color: Colors.white),
+                child: Container(
+                  margin: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withOpacity(0.3)),
+                  ),
+                  child: Icon(Icons.arrow_back, color: Colors.black87),
+                ),
               );
             },
           ),
@@ -126,89 +133,371 @@ class _FullPrivacyPolicyPageState extends State<FullPrivacyPolicyPage> with Sing
           opacity: _fadeAnimation,
           child: Text(
             'Privacy Policy',
-            style: GoogleFonts.manrope(
-              color: Colors.white,
+            style: GoogleFonts.poppins(
+              color: Colors.black87,
               fontWeight: FontWeight.w600,
+              fontSize: 22,
             ),
           ),
         ),
         centerTitle: true,
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
       ),
-      body: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          return Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xFFB2DFDB).withOpacity(_fadeAnimation.value),
-                  Colors.white,
-                ],
-              ),
-            ),
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(16.0),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFB2DFDB), Colors.white],
+          ),
+        ),
+        child: SafeArea(
+          child: SingleChildScrollView(
+            physics: BouncingScrollPhysics(),
+            child: Padding(
+              padding: EdgeInsets.all(20.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Header Section
+                  SizedBox(height: 20),
                   FadeTransition(
                     opacity: _fadeAnimation,
-                    child: Text(
-                      'Privacy Policy',
-                      style: GoogleFonts.manrope(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white.withOpacity(0.4)),
+                          ),
+                          child: Icon(
+                            Icons.privacy_tip,
+                            color: Colors.black87,
+                            size: 28,
+                          ),
+                        ),
+                        SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Privacy Policy',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                              Text(
+                                'Your privacy matters to us',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 16,
+                                  color: Colors.black54,
+                                  fontWeight: FontWeight.w400,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  SizedBox(height: 32),
+
+                  // Last Updated Badge
+                  SlideTransition(
+                    position: _slideAnimation,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Color(0xFF2196F3).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Color(0xFF2196F3).withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.update,
+                            size: 16,
+                            color: Color(0xFF2196F3),
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Last Updated: July 20, 2025',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: Color(0xFF2196F3),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                  SizedBox(height: 16),
+
+                  SizedBox(height: 24),
+
+                  // Introduction Card
                   SlideTransition(
                     position: _slideAnimation,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.08),
+                            blurRadius: 20,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text(
+                          'At Job Seaker App, we are committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information.',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            color: Colors.black87,
+                            height: 1.6,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  SizedBox(height: 24),
+
+                  // Privacy Policy Sections
+                  _buildPolicySection(
+                    icon: Icons.info_outline,
+                    iconColor: Color(0xFF2196F3),
+                    title: 'Information We Collect',
+                    content: [
+                      '• Personal Information: Name, email, and other details provided during account creation or job applications.',
+                      '• Usage Data: Information on how you interact with the app, such as pages visited and features used.',
+                      '• Location Data: If enabled in Privacy Settings, we collect location data to enhance job recommendations.',
+                    ],
+                  ),
+
+                  _buildPolicySection(
+                    icon: Icons.settings_outlined,
+                    iconColor: Color(0xFF4CAF50),
+                    title: 'How We Use Your Information',
+                    content: [
+                      '• To provide and improve our services, such as matching you with job opportunities.',
+                      '• To personalize your experience based on your preferences and location (if enabled).',
+                      '• To analyze usage patterns via Firebase Analytics, if you allow data sharing.',
+                    ],
+                  ),
+
+                  _buildPolicySection(
+                    icon: Icons.share_outlined,
+                    iconColor: Color(0xFFFF9800),
+                    title: 'Data Sharing',
+                    content: [
+                      '• We do not share your personal information with third parties except as required by law or with your consent.',
+                      '• Aggregated, anonymized data may be used for analytics purposes.',
+                    ],
+                  ),
+
+                  _buildPolicySection(
+                    icon: Icons.security_outlined,
+                    iconColor: Color(0xFF9C27B0),
+                    title: 'Data Security',
+                    content: [
+                      '• We implement industry-standard security measures to protect your data.',
+                      '• However, no method of transmission over the Internet is 100% secure.',
+                    ],
+                  ),
+
+                  _buildPolicySection(
+                    icon: Icons.tune_outlined,
+                    iconColor: Color(0xFFE91E63),
+                    title: 'Your Choices',
+                    content: [
+                      '• You can manage data sharing and location tracking in the Privacy Settings page.',
+                      '• You may request deletion of your account by contacting support@jobseakerapp.com.',
+                    ],
+                  ),
+
+                  _buildPolicySection(
+                    icon: Icons.update_outlined,
+                    iconColor: Color(0xFF00BCD4),
+                    title: 'Changes to This Policy',
+                    content: [
+                      '• We may update this Privacy Policy from time to time. The updated version will be indicated by the "Last Updated" date above.',
+                    ],
+                  ),
+
+                  SizedBox(height: 24),
+
+                  // Contact Card
+                  SlideTransition(
+                    position: _slideAnimation,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xFF00BCD4), Color(0xFF0097A7)],
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Color(0xFF00BCD4).withOpacity(0.3),
+                            blurRadius: 20,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Icon(
+                                Icons.email,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Questions?',
+                                    style: GoogleFonts.poppins(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Contact us at support@jobseakerapp.com',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 14,
+                                      color: Colors.white.withOpacity(0.9),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  SizedBox(height: 40),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPolicySection({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required List<String> content,
+  }) {
+    return SlideTransition(
+      position: _slideAnimation,
+      child: Container(
+        margin: EdgeInsets.only(bottom: 20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 15,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Section Header
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: iconColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      icon,
+                      color: iconColor,
+                      size: 22,
+                    ),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(
                     child: Text(
-                      '''
-Last Updated: July 20, 2025
-
-At Job Seaker App, we are committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information.
-
-1. **Information We Collect**
-- **Personal Information**: Name, email, and other details provided during account creation or job applications.
-- **Usage Data**: Information on how you interact with the app, such as pages visited and features used.
-- **Location Data**: If enabled in Privacy Settings, we collect location data to enhance job recommendations.
-
-2. **How We Use Your Information**
-- To provide and improve our services, such as matching you with job opportunities.
-- To personalize your experience based on your preferences and location (if enabled).
-- To analyze usage patterns via Firebase Analytics, if you allow data sharing.
-
-3. **Data Sharing**
-- We do not share your personal information with third parties except as required by law or with your consent.
-- Aggregated, anonymized data may be used for analytics purposes.
-
-4. **Data Security**
-- We implement industry-standard security measures to protect your data.
-- However, no method of transmission over the Internet is 100% secure.
-
-5. **Your Choices**
-- You can manage data sharing and location tracking in the Privacy Settings page.
-- You may request deletion of your account by contacting support@jobseakerapp.com.
-
-6. **Changes to This Policy**
-- We may update this Privacy Policy from time to time. The updated version will be indicated by the "Last Updated" date above.
-
-For questions, contact us at support@jobseakerapp.com.
-                      ''',
-                      style: GoogleFonts.manrope(fontSize: 16),
+                      title,
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 18,
+                        color: Colors.black87,
+                      ),
                     ),
                   ),
                 ],
               ),
-            ),
-          );
-        },
+
+              SizedBox(height: 16),
+
+              // Content
+              ...content.map((item) => Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      margin: EdgeInsets.only(top: 8, right: 12),
+                      width: 4,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: iconColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        item.substring(2), // Remove the bullet point
+                        style: GoogleFonts.poppins(
+                          fontSize: 15,
+                          color: Colors.black87,
+                          height: 1.5,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+            ],
+          ),
+        ),
       ),
     );
   }

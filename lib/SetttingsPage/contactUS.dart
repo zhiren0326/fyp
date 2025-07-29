@@ -121,8 +121,12 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Please log in to submit a message'),
+            backgroundColor: Colors.orange.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             action: SnackBarAction(
               label: 'Log In',
+              textColor: Colors.white,
               onPressed: () => Navigator.pushNamed(context, '/account'),
             ),
           ),
@@ -144,12 +148,28 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
         _subjectController.clear();
         _messageController.clear();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Message submitted successfully')),
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 8),
+                Text('Message submitted successfully'),
+              ],
+            ),
+            backgroundColor: Colors.green.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
         );
       } catch (e) {
         print('Error submitting contact form: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to submit message: $e')),
+          SnackBar(
+            content: Text('Failed to submit message: $e'),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
         );
       }
     }
@@ -159,7 +179,7 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
   Future<void> _launchEmail() async {
     final Uri emailUri = Uri(
       scheme: 'mailto',
-      path: 'support@jobseakerapp.com',
+      path: 'chiazr-wp22@student.tarc.edu.my',
       queryParameters: {'subject': 'Support Inquiry'},
     );
     if (await canLaunchUrl(emailUri)) {
@@ -196,7 +216,10 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.transparent,
         leading: GestureDetector(
           onTapDown: (_) => _controller.reverse(),
           onTapUp: (_) {
@@ -209,7 +232,15 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
             builder: (context, child) {
               return Transform.scale(
                 scale: _scaleAnimation.value,
-                child: const Icon(Icons.arrow_back, color: Colors.white),
+                child: Container(
+                  margin: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withOpacity(0.3)),
+                  ),
+                  child: Icon(Icons.arrow_back, color: Colors.black87),
+                ),
               );
             },
           ),
@@ -218,71 +249,151 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
           opacity: _fadeAnimation,
           child: Text(
             'Contact Us',
-            style: GoogleFonts.manrope(
-              color: Colors.white,
+            style: GoogleFonts.poppins(
+              color: Colors.black87,
               fontWeight: FontWeight.w600,
+              fontSize: 22,
             ),
           ),
         ),
         centerTitle: true,
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
       ),
-      body: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          return Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xFFB2DFDB).withOpacity(_fadeAnimation.value),
-                  Colors.white,
-                ],
-              ),
-            ),
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(16.0),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFB2DFDB), Colors.white],
+          ),
+        ),
+        child: SafeArea(
+          child: SingleChildScrollView(
+            physics: BouncingScrollPhysics(),
+            child: Padding(
+              padding: EdgeInsets.all(20.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Header Section
+                  SizedBox(height: 20),
                   FadeTransition(
                     opacity: _fadeAnimation,
-                    child: Text(
-                      'Contact Us',
-                      style: GoogleFonts.manrope(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.3),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.white.withOpacity(0.4)),
+                              ),
+                              child: Icon(
+                                Icons.contact_support,
+                                color: Colors.black87,
+                                size: 28,
+                              ),
+                            ),
+                            SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Get in Touch',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  Text(
+                                    'We\'d love to hear from you',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 16,
+                                      color: Colors.black54,
+                                      fontWeight: FontWeight.w400,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  SizedBox(height: 16),
+
+                  SizedBox(height: 32),
+
                   // Contact Form
                   SlideTransition(
                     position: _slideAnimation,
-                    child: Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.08),
+                            blurRadius: 20,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
                       child: Padding(
-                        padding: EdgeInsets.all(16.0),
+                        padding: EdgeInsets.all(24.0),
                         child: Form(
                           key: _formKey,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                'Send us a message',
-                                style: GoogleFonts.manrope(fontWeight: FontWeight.w500),
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Color(0xFF2196F3).withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      Icons.message,
+                                      color: Color(0xFF2196F3),
+                                      size: 20,
+                                    ),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text(
+                                    'Send us a message',
+                                    style: GoogleFonts.poppins(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 18,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              SizedBox(height: 8),
+                              SizedBox(height: 20),
                               TextFormField(
                                 controller: _subjectController,
                                 decoration: InputDecoration(
                                   labelText: 'Subject',
-                                  border: OutlineInputBorder(),
-                                  labelStyle: GoogleFonts.manrope(),
+                                  labelStyle: GoogleFonts.poppins(color: Colors.grey[600]),
+                                  filled: true,
+                                  fillColor: Colors.grey[50],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                    borderSide: BorderSide(color: Color(0xFF2196F3), width: 2),
+                                  ),
+                                  prefixIcon: Icon(Icons.subject, color: Color(0xFF2196F3)),
                                 ),
+                                style: GoogleFonts.poppins(),
                                 validator: (value) {
                                   if (value == null || value.isEmpty) {
                                     return 'Please enter a subject';
@@ -290,15 +401,27 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
                                   return null;
                                 },
                               ),
-                              SizedBox(height: 8),
+                              SizedBox(height: 16),
                               TextFormField(
                                 controller: _messageController,
                                 decoration: InputDecoration(
                                   labelText: 'Message',
-                                  border: OutlineInputBorder(),
-                                  labelStyle: GoogleFonts.manrope(),
+                                  labelStyle: GoogleFonts.poppins(color: Colors.grey[600]),
+                                  filled: true,
+                                  fillColor: Colors.grey[50],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                    borderSide: BorderSide(color: Color(0xFF2196F3), width: 2),
+                                  ),
+                                  prefixIcon: Icon(Icons.message, color: Color(0xFF2196F3)),
+                                  alignLabelWithHint: true,
                                 ),
                                 maxLines: 5,
+                                style: GoogleFonts.poppins(),
                                 validator: (value) {
                                   if (value == null || value.isEmpty) {
                                     return 'Please enter a message';
@@ -306,18 +429,47 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
                                   return null;
                                 },
                               ),
-                              SizedBox(height: 16),
-                              ElevatedButton(
-                                onPressed: _submitForm,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.teal,
-                                  foregroundColor: Colors.white,
-                                  padding: EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              SizedBox(height: 24),
+                              Container(
+                                width: double.infinity,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [Color(0xFF2196F3), Color(0xFF1976D2)],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Color(0xFF2196F3).withOpacity(0.3),
+                                      blurRadius: 12,
+                                      offset: Offset(0, 6),
+                                    ),
+                                  ],
                                 ),
-                                child: Text(
-                                  'Submit',
-                                  style: GoogleFonts.manrope(),
+                                child: ElevatedButton(
+                                  onPressed: _submitForm,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.transparent,
+                                    shadowColor: Colors.transparent,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.send, color: Colors.white),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'Send Message',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ],
@@ -326,37 +478,67 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
                       ),
                     ),
                   ),
-                  SizedBox(height: 16),
+
+                  SizedBox(height: 24),
+
                   // Contact Information
                   SlideTransition(
                     position: _slideAnimation,
-                    child: Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.08),
+                            blurRadius: 20,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
                       child: Padding(
-                        padding: EdgeInsets.all(16.0),
+                        padding: EdgeInsets.all(24.0),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              'Contact Information',
-                              style: GoogleFonts.manrope(fontWeight: FontWeight.w500),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Color(0xFF4CAF50).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(
+                                    Icons.contact_phone,
+                                    color: Color(0xFF4CAF50),
+                                    size: 20,
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                Text(
+                                  'Contact Information',
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 18,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ],
                             ),
-                            SizedBox(height: 8),
-                            ListTile(
-                              leading: Icon(Icons.email, color: Colors.teal),
-                              title: Text(
-                                'Email: chiazr-wp22@student.tarc.edu.my',
-                                style: GoogleFonts.manrope(),
-                              ),
+                            SizedBox(height: 20),
+                            _buildContactItem(
+                              icon: Icons.email_outlined,
+                              title: 'Email',
+                              subtitle: 'chiazr-wp22@student.tarc.edu.my',
+                              color: Color(0xFFFF5722),
                               onTap: _launchEmail,
                             ),
-                            ListTile(
-                              leading: Icon(Icons.phone, color: Colors.teal),
-                              title: Text(
-                                'Phone: +6011-28054345',
-                                style: GoogleFonts.manrope(),
-                              ),
+                            _buildContactItem(
+                              icon: Icons.phone_outlined,
+                              title: 'Phone',
+                              subtitle: '+6011-28054345',
+                              color: Color(0xFF2196F3),
                               onTap: () async {
                                 const phoneUrl = 'tel:+601128054345';
                                 if (await canLaunchUrl(Uri.parse(phoneUrl))) {
@@ -369,41 +551,176 @@ class _ContactUsPageState extends State<ContactUsPage> with SingleTickerProvider
                                 }
                               },
                             ),
-                            ListTile(
-                              leading: Icon(Icons.location_on, color: Colors.teal),
-                              title: Text(
-                                'Address: PV13,Taman Danau Kota,Setapak,Kuala Lumpur,Malaysia',
-                                style: GoogleFonts.manrope(),
-                              ),
+                            _buildContactItem(
+                              icon: Icons.location_on_outlined,
+                              title: 'Address',
+                              subtitle: 'PV13,Taman Danau Kota,Setapak,Kuala Lumpur,Malaysia',
+                              color: Color(0xFF9C27B0),
+                              onTap: null,
                             ),
                           ],
                         ),
                       ),
                     ),
                   ),
-                  SizedBox(height: 16),
+
+                  SizedBox(height: 24),
+
                   // Support Website
                   SlideTransition(
                     position: _slideAnimation,
-                    child: Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      child: ListTile(
-                        leading: Icon(Icons.web, color: Colors.teal),
-                        title: Text(
-                          'Visit Support Website',
-                          style: GoogleFonts.manrope(fontWeight: FontWeight.w500),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xFF00BCD4), Color(0xFF0097A7)],
                         ),
-                        trailing: Icon(Icons.arrow_forward_ios, color: Colors.teal),
-                        onTap: _launchWebsite,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Color(0xFF00BCD4).withOpacity(0.3),
+                            blurRadius: 20,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: _launchWebsite,
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Icon(
+                                    Icons.web,
+                                    color: Colors.white,
+                                    size: 28,
+                                  ),
+                                ),
+                                SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Visit Support Website',
+                                        style: GoogleFonts.poppins(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 16,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Get more help and resources',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 14,
+                                          color: Colors.white.withOpacity(0.8),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(
+                                    Icons.arrow_forward,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
+
+                  SizedBox(height: 40),
                 ],
               ),
             ),
-          );
-        },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContactItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    VoidCallback? onTap,
+  }) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: color, size: 24),
+                ),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (onTap != null)
+                  Icon(
+                    Icons.arrow_forward_ios,
+                    size: 16,
+                    color: Colors.grey[400],
+                  ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -18,13 +18,19 @@ class ChatScreen extends StatefulWidget {
   _ChatScreenState createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver, TickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _groupSearchController = TextEditingController();
   String? _currentUserCustomId;
   List<DocumentSnapshot> _searchResults = [];
   List<DocumentSnapshot> _groupSearchResults = [];
   List<Map<String, dynamic>> _createdGroups = [];
+
+  // Animation controllers
+  late AnimationController _fadeController;
+  late AnimationController _slideController;
+  late Animation<double> _fadeAnimation;
+  late Animation<Offset> _slideAnimation;
 
   // For notification management
   Set<String> _processedMessageIds = {};
@@ -40,6 +46,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+
+    // Initialize animations
+    _fadeController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _slideController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    );
+
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _fadeController, curve: Curves.easeInOut),
+    );
+
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0.0, 0.3),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _slideController, curve: Curves.easeOutCubic));
+
+    // Start animations
+    _fadeController.forward();
+    _slideController.forward();
+
     WidgetsBinding.instance.addObserver(this);
     _initializeNotifications();
     _initializeUserCustomId();
@@ -51,6 +81,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _fadeController.dispose();
+    _slideController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     _groupSearchController.dispose();
@@ -64,7 +96,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _isAppInForeground = state == AppLifecycleState.resumed;
     });
 
-    // Clear badge when app comes to foreground if all messages are read
     if (state == AppLifecycleState.resumed) {
       int totalUnread = 0;
       _unreadMessageCounts.forEach((key, value) {
@@ -75,7 +106,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  // Load unread message counts from Firestore
   Future<void> _loadUnreadMessageCounts() async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
@@ -98,7 +128,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  // Listen for unread count changes
   void _listenForUnreadCounts() {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
@@ -118,7 +147,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
   }
 
-  // Reset unread count when opening a chat
   Future<void> _resetUnreadCount(String chatId) async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
@@ -135,7 +163,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         _unreadMessageCounts.remove(chatId);
       });
 
-      // Update badge count after resetting
       int totalUnread = 0;
       _unreadMessageCounts.forEach((key, value) {
         if (key != chatId) {
@@ -147,16 +174,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  // Initialize local notifications
   Future<void> _initializeNotifications() async {
-    // Request notification permissions
     await _requestNotificationPermissions();
 
-    // Android initialization settings with importance high for badges
     const AndroidInitializationSettings initializationSettingsAndroid =
     AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    // iOS initialization settings with badge permission
     const DarwinInitializationSettings initializationSettingsIOS =
     DarwinInitializationSettings(
       requestSoundPermission: true,
@@ -177,16 +200,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       onDidReceiveNotificationResponse: _onNotificationTapped,
     );
 
-    // Create notification channel for Android with badge support
     if (Platform.isAndroid) {
       await _createNotificationChannel();
     }
 
-    // Clear any existing badges on app start
     await flutterLocalNotificationsPlugin.cancelAll();
   }
 
-  // Request notification permissions
   Future<void> _requestNotificationPermissions() async {
     if (Platform.isAndroid) {
       final status = await Permission.notification.request();
@@ -204,7 +224,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  // Create notification channel for Android
   Future<void> _createNotificationChannel() async {
     const AndroidNotificationChannel channel = AndroidNotificationChannel(
       'chat_messages',
@@ -219,7 +238,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ?.createNotificationChannel(channel);
   }
 
-  // Handle notification tap
   void _onNotificationTapped(NotificationResponse notificationResponse) {
     final payload = notificationResponse.payload;
     if (payload != null) {
@@ -236,7 +254,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  // Send local notification with badge count
   Future<void> _sendLocalNotification({
     required String title,
     required String body,
@@ -244,13 +261,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     required int badgeCount,
   }) async {
     try {
-      // Calculate total unread messages across all chats
       int totalUnread = 0;
       _unreadMessageCounts.forEach((key, value) {
         totalUnread += value;
       });
 
-      // Android notification with badge support
       AndroidNotificationDetails androidPlatformChannelSpecifics =
       AndroidNotificationDetails(
         'chat_messages',
@@ -262,11 +277,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         enableVibration: true,
         playSound: true,
         icon: '@mipmap/ic_launcher',
-        color: const Color(0xFF00796B), // Teal color
-        ledColor: const Color(0xFF00796B),
+        color: const Color(0xFF6C63FF),
+        ledColor: const Color(0xFF6C63FF),
         ledOnMs: 1000,
         ledOffMs: 500,
-        number: totalUnread, // This shows the badge count on Android
+        number: totalUnread,
         styleInformation: BigTextStyleInformation(
           body,
           contentTitle: title,
@@ -274,14 +289,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
       );
 
-      // iOS notification with badge support
       DarwinNotificationDetails iOSPlatformChannelSpecifics =
       DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
         sound: 'default',
-        badgeNumber: totalUnread, // This sets the app icon badge on iOS
+        badgeNumber: totalUnread,
       );
 
       NotificationDetails platformChannelSpecifics = NotificationDetails(
@@ -289,7 +303,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         iOS: iOSPlatformChannelSpecifics,
       );
 
-      // Show notification even when app is in foreground for better UX
       await flutterLocalNotificationsPlugin.show(
         DateTime.now().millisecondsSinceEpoch.remainder(100000),
         title,
@@ -297,13 +310,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         platformChannelSpecifics,
         payload: jsonEncode(payload),
       );
-
-      // Update app badge number
     } catch (e) {
       print('Error sending notification: $e');
     }
   }
-
 
   String _generateCustomId() {
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -354,7 +364,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
       }
 
-      // Start listening for unread counts after getting custom ID
       _listenForUnreadCounts();
     } catch (e) {
       _showErrorSnackBar('Failed to initialize user ID: $e');
@@ -414,29 +423,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final currentTimestamp = data['timestamp'];
     final lastTimestamp = _lastMessageTimestamps[messageId];
 
-    // Check if this is actually a new message
     bool isNewMessage = false;
 
     if (lastTimestamp == null) {
-      // First time seeing this message
       isNewMessage = true;
     } else if (currentTimestamp != null && lastTimestamp != null) {
-      // Compare timestamps to see if message was updated
       if (currentTimestamp is Timestamp && lastTimestamp is Timestamp) {
         isNewMessage = currentTimestamp.millisecondsSinceEpoch > lastTimestamp.millisecondsSinceEpoch;
       }
     }
 
-    // Update our local timestamp record
     _lastMessageTimestamps[messageId] = currentTimestamp;
 
-    // Only show notification and increment unread count for genuinely new messages
     if (isNewMessage && !_processedMessageIds.contains(messageId)) {
       _processedMessageIds.add(messageId);
 
-      // Don't increment if message is from current user
       if (data['senderCustomId'] != _currentUserCustomId) {
-        // Increment unread count
         await _incrementUnreadCount(messageId);
       }
 
@@ -444,7 +446,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  // Increment unread count for a chat
   Future<void> _incrementUnreadCount(String chatId) async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
@@ -464,7 +465,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _showNewMessageNotification(Map<String, dynamic> data) {
-    // Don't show notifications if the message is from the current user
     if (data['senderCustomId'] == _currentUserCustomId) return;
 
     final String chatId = data['groupId'] ?? data['receiverCustomId'] ?? 'Unknown';
@@ -487,7 +487,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         break;
       default:
         notificationContent = data['lastMessage'] ?? 'New message';
-        // Truncate long messages
         if (notificationContent.length > 100) {
           notificationContent = '${notificationContent.substring(0, 97)}...';
         }
@@ -498,7 +497,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ? (data['groupName'] ?? 'Group $chatId')
         : senderName;
 
-    // Prepare notification title and body
     String notificationTitle;
     String notificationBody;
 
@@ -510,10 +508,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       notificationBody = notificationContent;
     }
 
-    // Get current unread count for this chat
     int chatUnreadCount = _unreadMessageCounts[chatId] ?? 0;
 
-    // Send local notification with badge count
     _sendLocalNotification(
       title: notificationTitle,
       body: notificationBody,
@@ -527,9 +523,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       badgeCount: chatUnreadCount,
     );
 
-    // Show in-app notification if app is in foreground
     if (_isAppInForeground && mounted) {
-      // Calculate total unread for display
       int totalUnread = 0;
       _unreadMessageCounts.forEach((key, value) {
         totalUnread += value;
@@ -537,79 +531,99 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      notificationTitle,
+          content: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Icon(
+                    isGroup ? Icons.group_rounded : Icons.person_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        notificationTitle,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        notificationBody,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Colors.white70,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                if (chatUnreadCount > 0)
+                  Container(
+                    margin: const EdgeInsets.only(left: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(
+                      chatUnreadCount > 99 ? '99+' : chatUnreadCount.toString(),
                       style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                        color: Color(0xFF6C63FF),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      notificationBody,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ],
-                ),
-              ),
-              if (chatUnreadCount > 0)
-                Container(
-                  margin: const EdgeInsets.only(left: 8),
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
                   ),
-                  child: Text(
-                    chatUnreadCount > 99 ? '99+' : chatUnreadCount.toString(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-            ],
+              ],
+            ),
           ),
-          backgroundColor: Colors.teal[700],
+          backgroundColor: const Color(0xFF6C63FF),
           duration: const Duration(seconds: 4),
           behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(20),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(24),
           ),
           action: SnackBarAction(
             label: 'View',
             textColor: Colors.white,
+            backgroundColor: Colors.white.withOpacity(0.15),
             onPressed: () => _navigateToChat(chatId, chatName, data),
           ),
         ),
       );
 
-      // Play notification feedback
       _playNotificationFeedback();
     }
   }
 
   void _playNotificationFeedback() {
-    // Add haptic feedback
     HapticFeedback.lightImpact();
-
-    // Play system sound
     SystemSound.play(SystemSoundType.click);
   }
 
   void _navigateToChat(String chatId, String chatName, Map<String, dynamic> data) {
-    // Reset unread count when navigating to chat
     _resetUnreadCount(chatId);
 
-    // Navigate to the specific chat
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -627,9 +641,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.red[700],
+          content: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.error_outline_rounded, color: Colors.white, size: 16),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(message, style: const TextStyle(fontSize: 14))),
+            ],
+          ),
+          backgroundColor: const Color(0xFFFF6B6B),
           duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(20),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         ),
       );
     }
@@ -639,9 +669,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.teal[700],
+          content: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.check_circle_outline_rounded, color: Colors.white, size: 16),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(message, style: const TextStyle(fontSize: 14))),
+            ],
+          ),
+          backgroundColor: const Color(0xFF4ECDC4),
           duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(20),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         ),
       );
     }
@@ -786,99 +832,202 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Modify Group Details'),
-        content: SingleChildScrollView(
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(28),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFF6C63FF).withOpacity(0.08),
+                const Color(0xFF4ECDC4).withOpacity(0.08),
+              ],
+            ),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Group Name'),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6C63FF).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Icon(
+                  Icons.edit_rounded,
+                  color: Color(0xFF6C63FF),
+                  size: 28,
+                ),
               ),
-              TextField(
-                controller: descriptionController,
-                decoration: const InputDecoration(labelText: 'Group Description'),
-                maxLines: 3,
+              const SizedBox(height: 20),
+              const Text(
+                'Modify Group Details',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF2D3748),
+                ),
               ),
-              const SizedBox(height: 10),
-              ElevatedButton(
-                onPressed: () async {
-                  final picker = ImagePicker();
-                  final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-                  if (pickedFile != null) {
-                    final bytes = await File(pickedFile.path).readAsBytes();
-                    base64Image = 'data:image/png;base64,${base64Encode(bytes)}';
-                    setState(() {});
-                  }
-                },
-                child: const Text('Pick Group Image'),
+              const SizedBox(height: 28),
+              _buildModernTextField(nameController, 'Group Name', Icons.group_rounded),
+              const SizedBox(height: 20),
+              _buildModernTextField(descriptionController, 'Group Description', Icons.description_rounded, maxLines: 3),
+              const SizedBox(height: 24),
+              Container(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final picker = ImagePicker();
+                    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+                    if (pickedFile != null) {
+                      final bytes = await File(pickedFile.path).readAsBytes();
+                      base64Image = 'data:image/png;base64,${base64Encode(bytes)}';
+                      setState(() {});
+                    }
+                  },
+                  icon: const Icon(Icons.image_rounded, color: Colors.white, size: 20),
+                  label: const Text('Pick Group Image', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6C63FF),
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    elevation: 0,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 28),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel', style: TextStyle(color: Color(0xFF6C63FF), fontWeight: FontWeight.w600, fontSize: 15)),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        try {
+                          await FirebaseFirestore.instance
+                              .collection('groups')
+                              .doc(groupId)
+                              .update({
+                            'name': nameController.text.trim(),
+                            'description': descriptionController.text.trim(),
+                            if (base64Image != null) 'photoURL': base64Image,
+                          });
+
+                          final memberDocs = await FirebaseFirestore.instance
+                              .collection('groups')
+                              .doc(groupId)
+                              .collection('members')
+                              .get();
+                          for (var member in memberDocs.docs) {
+                            await FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(member['userId'])
+                                .collection('chats')
+                                .doc('chat_list')
+                                .set({
+                              'users': FieldValue.arrayUnion([
+                                {
+                                  'customId': groupId,
+                                  'name': nameController.text.trim(),
+                                  'photoURL': base64Image ?? 'assets/group_icon.png',
+                                  'isGroup': true,
+                                }
+                              ])
+                            }, SetOptions(merge: true));
+                          }
+
+                          setState(() {
+                            final index = _createdGroups.indexWhere((g) => g['groupId'] == groupId);
+                            if (index != -1) {
+                              _createdGroups[index] = {
+                                'groupId': groupId,
+                                'name': nameController.text.trim(),
+                                'photoURL': base64Image ?? 'assets/group_icon.png',
+                                'description': descriptionController.text.trim(),
+                              };
+                            }
+                          });
+
+                          _showSuccessSnackBar('Group details updated successfully');
+                          Navigator.pop(context);
+                        } catch (e) {
+                          _showErrorSnackBar('Failed to update group: $e');
+                        }
+                      },
+                      child: const Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4ECDC4),
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              try {
-                await FirebaseFirestore.instance
-                    .collection('groups')
-                    .doc(groupId)
-                    .update({
-                  'name': nameController.text.trim(),
-                  'description': descriptionController.text.trim(),
-                  if (base64Image != null) 'photoURL': base64Image,
-                });
+      ),
+    );
+  }
 
-                // Update chat list for all group members
-                final memberDocs = await FirebaseFirestore.instance
-                    .collection('groups')
-                    .doc(groupId)
-                    .collection('members')
-                    .get();
-                for (var member in memberDocs.docs) {
-                  await FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(member['userId'])
-                      .collection('chats')
-                      .doc('chat_list')
-                      .set({
-                    'users': FieldValue.arrayUnion([
-                      {
-                        'customId': groupId,
-                        'name': nameController.text.trim(),
-                        'photoURL': base64Image ?? 'assets/group_icon.png',
-                        'isGroup': true,
-                      }
-                    ])
-                  }, SetOptions(merge: true));
-                }
-
-                setState(() {
-                  final index = _createdGroups.indexWhere((g) => g['groupId'] == groupId);
-                  if (index != -1) {
-                    _createdGroups[index] = {
-                      'groupId': groupId,
-                      'name': nameController.text.trim(),
-                      'photoURL': base64Image ?? 'assets/group_icon.png',
-                      'description': descriptionController.text.trim(),
-                    };
-                  }
-                });
-
-                _showSuccessSnackBar('Group details updated successfully');
-                Navigator.pop(context);
-              } catch (e) {
-                _showErrorSnackBar('Failed to update group: $e');
-              }
-            },
-            child: const Text('Save'),
+  Widget _buildModernTextField(TextEditingController controller, String label, IconData icon, {int maxLines = 1}) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
+      ),
+      child: TextField(
+        controller: controller,
+        maxLines: maxLines,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Container(
+            margin: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF6C63FF).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: const Color(0xFF6C63FF), size: 18),
+          ),
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(20),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(20),
+            borderSide: BorderSide(color: Colors.grey.withOpacity(0.1)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(20),
+            borderSide: const BorderSide(color: Color(0xFF6C63FF), width: 1.5),
+          ),
+          labelStyle: TextStyle(color: Colors.grey[600], fontSize: 14),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        ),
+        style: const TextStyle(fontSize: 15),
       ),
     );
   }
@@ -898,38 +1047,95 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     bool? confirmDelete = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Group'),
-        content: Text('Are you sure you want to delete group ${groupDoc['name']} ($groupId)? This action cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(28),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFFFF6B6B).withOpacity(0.08),
+                const Color(0xFFFF8E8E).withOpacity(0.08),
+              ],
+            ),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF6B6B).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: const Icon(
+                  Icons.warning_rounded,
+                  color: Color(0xFFFF6B6B),
+                  size: 32,
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Delete Group',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF2D3748),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Are you sure you want to delete group ${groupDoc['name']} ($groupId)? This action cannot be undone.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 15,
+                  color: Colors.grey[600],
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 28),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel', style: TextStyle(color: Color(0xFF6C63FF), fontWeight: FontWeight.w600, fontSize: 15)),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Delete', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF6B6B),
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
 
     if (confirmDelete != true) return;
 
     try {
-      // Delete from group_ids
-      await FirebaseFirestore.instance
-          .collection('group_ids')
-          .doc(groupId)
-          .delete();
+      await FirebaseFirestore.instance.collection('group_ids').doc(groupId).delete();
+      await FirebaseFirestore.instance.collection('groups').doc(groupId).delete();
 
-      // Delete from groups
-      await FirebaseFirestore.instance
-          .collection('groups')
-          .doc(groupId)
-          .delete();
-
-      // Delete from all members' groups and chat list
       final memberDocs = await FirebaseFirestore.instance
           .collection('groups')
           .doc(groupId)
@@ -943,7 +1149,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             .doc(groupId)
             .delete();
 
-        // Remove from member's chat list
         final chatDocRef = FirebaseFirestore.instance
             .collection('users')
             .doc(member['userId'])
@@ -959,7 +1164,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           }
         });
 
-        // Delete last message notification
         await FirebaseFirestore.instance
             .collection('users')
             .doc(member['userId'])
@@ -1116,37 +1320,144 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       showDialog(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Group Members'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: members.length,
-              itemBuilder: (context, index) {
-                final member = members[index];
-                return ListTile(
-                  title: Text(
-                    member['name'],
-                    style: TextStyle(
-                      color: Colors.teal[900],
-                      fontWeight: FontWeight.w600,
+        builder: (context) => Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          child: Container(
+            padding: const EdgeInsets.all(28),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(28),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  const Color(0xFF6C63FF).withOpacity(0.08),
+                  const Color(0xFF4ECDC4).withOpacity(0.08),
+                ],
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6C63FF).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Icon(
+                        Icons.group_rounded,
+                        color: Color(0xFF6C63FF),
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    const Expanded(
+                      child: Text(
+                        'Group Members',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF2D3748),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  width: double.maxFinite,
+                  height: 300,
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: members.length,
+                    itemBuilder: (context, index) {
+                      final member = members[index];
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.03),
+                              blurRadius: 10,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: LinearGradient(
+                                  colors: [
+                                    const Color(0xFF6C63FF),
+                                    const Color(0xFF4ECDC4),
+                                  ],
+                                ),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  member['name'][0].toUpperCase(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    member['name'],
+                                    style: const TextStyle(
+                                      color: Color(0xFF2D3748),
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'ID: ${member['customId']}',
+                                    style: TextStyle(
+                                      color: Colors.grey[600],
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Close', style: TextStyle(color: Color(0xFF6C63FF), fontWeight: FontWeight.w600, fontSize: 15)),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                     ),
                   ),
-                  subtitle: Text(
-                    'ID: ${member['customId']}',
-                    style: TextStyle(color: Colors.teal[600]),
-                  ),
-                );
-              },
+                ),
+              ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
         ),
       );
     } catch (e) {
@@ -1246,132 +1557,130 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final currentUser = FirebaseAuth.instance.currentUser;
     return Scaffold(
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [const Color(0xFFB2DFDB), Colors.white],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFFF8FAFF),
+              Color(0xFFE8F4F8),
+              Color(0xFFF0F8FF),
+            ],
+            stops: [0.0, 0.5, 1.0],
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16.0, 20.0, 16.0, 16.0),
-                child: Column(
-                  children: [
-                    const Text(
-                      'Chat',
-                      style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    if (_currentUserCustomId != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.95),
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              'Your ID: $_currentUserCustomId',
-                              style: TextStyle(
-                                color: Colors.teal[900],
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.8,
+          child: FadeTransition(
+            opacity: _fadeAnimation,
+            child: SlideTransition(
+              position: _slideAnimation,
+              child: CustomScrollView(
+                slivers: [
+                  // Header Section
+                  SliverToBoxAdapter(
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+                      child: Column(
+                        children: [
+                          // App Title
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      const Color(0xFF6C63FF),
+                                      const Color(0xFF4ECDC4),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(24),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFF6C63FF).withOpacity(0.2),
+                                      blurRadius: 20,
+                                      offset: const Offset(0, 8),
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.chat_bubble_rounded,
+                                  color: Colors.white,
+                                  size: 28,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            IconButton(
-                              icon: Icon(Icons.copy, color: Colors.teal[700], size: 28),
-                              onPressed: _copyCustomId,
-                              tooltip: 'Copy ID',
-                            ),
-                            IconButton(
-                              icon: Icon(Icons.share, color: Colors.teal[700], size: 28),
-                              onPressed: _shareCustomId,
-                              tooltip: 'Share ID',
-                            ),
-                          ],
-                        ),
-                      ),
-                    const SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      onPressed: _createGroup,
-                      icon: Icon(Icons.group_add, color: Colors.white, size: 28),
-                      label: const Text(
-                        'Create Group Chat',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal[800],
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                        elevation: 6,
-                        shadowColor: Colors.black26,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (_createdGroups.isNotEmpty)
-                      Column(
-                        children: _createdGroups.map((group) {
-                          final groupId = group['groupId'];
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 6.0),
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
+                              const SizedBox(width: 20),
+                              const Text(
+                                'ChatHub',
+                                style: TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF2D3748),
+                                  letterSpacing: -0.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 32),
+
+                          // User ID Card
+                          if (_currentUserCustomId != null)
+                            Container(
+                              padding: const EdgeInsets.all(24),
                               decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.95),
-                                borderRadius: BorderRadius.circular(16),
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    const Color(0xFF6C63FF),
+                                    const Color(0xFF4ECDC4),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(28),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.black12,
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
+                                    color: const Color(0xFF6C63FF).withOpacity(0.3),
+                                    blurRadius: 24,
+                                    offset: const Offset(0, 12),
                                   ),
                                 ],
                               ),
                               child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: const Icon(
+                                      Icons.badge_rounded,
+                                      color: Colors.white,
+                                      size: 24,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 20),
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          'Group: ${group['name']}',
+                                        const Text(
+                                          'Your Chat ID',
                                           style: TextStyle(
-                                            color: Colors.teal[900],
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white70,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
                                           ),
                                         ),
+                                        const SizedBox(height: 6),
                                         Text(
-                                          'ID: $groupId',
-                                          style: TextStyle(
-                                            color: Colors.teal[600],
-                                            fontSize: 14,
+                                          _currentUserCustomId!,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: 1.5,
                                           ),
                                         ),
                                       ],
@@ -1379,350 +1688,927 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                   ),
                                   Row(
                                     children: [
-                                      IconButton(
-                                        icon: Icon(Icons.copy, color: Colors.teal[700], size: 28),
-                                        onPressed: () => _copyGroupId(groupId),
-                                        tooltip: 'Copy Group ID',
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
+                                        child: IconButton(
+                                          icon: const Icon(Icons.copy_rounded, color: Colors.white, size: 18),
+                                          onPressed: _copyCustomId,
+                                          tooltip: 'Copy ID',
+                                          padding: const EdgeInsets.all(12),
+                                        ),
                                       ),
-                                      IconButton(
-                                        icon: Icon(Icons.share, color: Colors.teal[700], size: 28),
-                                        onPressed: () => _shareGroupId(groupId),
-                                        tooltip: 'Share Group ID',
-                                      ),
-                                      IconButton(
-                                        icon: Icon(Icons.group, color: Colors.teal[700], size: 28),
-                                        onPressed: () => _showGroupMembers(groupId),
-                                        tooltip: 'View Members',
-                                      ),
-                                      FutureBuilder<DocumentSnapshot>(
-                                        future: FirebaseFirestore.instance
-                                            .collection('groups')
-                                            .doc(groupId)
-                                            .get(),
-                                        builder: (context, snapshot) {
-                                          if (!snapshot.hasData || !snapshot.data!.exists) {
-                                            return const SizedBox.shrink();
-                                          }
-                                          final isCreator = snapshot.data!['creatorId'] == currentUser?.uid;
-                                          return Row(
-                                            children: [
-                                              if (isCreator)
-                                                IconButton(
-                                                  icon: Icon(Icons.edit, color: Colors.teal[700], size: 28),
-                                                  onPressed: () => _modifyGroup(groupId),
-                                                  tooltip: 'Edit Group',
-                                                ),
-                                              if (isCreator)
-                                                IconButton(
-                                                  icon: Icon(Icons.delete, color: Colors.red[700], size: 28),
-                                                  onPressed: () => _deleteGroup(groupId),
-                                                  tooltip: 'Delete Group',
-                                                ),
-                                            ],
-                                          );
-                                        },
+                                      const SizedBox(width: 12),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
+                                        child: IconButton(
+                                          icon: const Icon(Icons.share_rounded, color: Colors.white, size: 18),
+                                          onPressed: _shareCustomId,
+                                          tooltip: 'Share ID',
+                                          padding: const EdgeInsets.all(12),
+                                        ),
                                       ),
                                     ],
                                   ),
                                 ],
                               ),
                             ),
-                          );
-                        }).toList(),
+                        ],
                       ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    hintText: 'Enter user ID (e.g., ABC123)',
-                    hintStyle: TextStyle(color: Colors.teal[500], fontSize: 18),
-                    prefixIcon: Icon(Icons.search, color: Colors.teal[800], size: 30),
-                    filled: true,
-                    fillColor: Colors.white.withOpacity(0.9),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide.none,
                     ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide(color: Colors.teal[400]!, width: 2),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide(color: Colors.teal[800]!, width: 3),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
                   ),
-                  style: TextStyle(fontSize: 18, color: Colors.teal[900]),
-                  onChanged: (query) {
-                    _searchUsers(query);
-                  },
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-                child: TextField(
-                  controller: _groupSearchController,
-                  decoration: InputDecoration(
-                    hintText: 'Enter group ID (e.g., ABC123)',
-                    hintStyle: TextStyle(color: Colors.teal[500], fontSize: 18),
-                    prefixIcon: Icon(Icons.group, color: Colors.teal[800], size: 30),
-                    filled: true,
-                    fillColor: Colors.white.withOpacity(0.9),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide.none,
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide(color: Colors.teal[400]!, width: 2),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      borderSide: BorderSide(color: Colors.teal[800]!, width: 3),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                  ),
-                  style: TextStyle(fontSize: 18, color: Colors.teal[900]),
-                  onSubmitted: (query) {
-                    _joinGroup(query.toUpperCase());
-                  },
-                ),
-              ),
-              if (_searchResults.isNotEmpty)
-                Container(
-                  height: 140,
-                  padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                  child: ListView.builder(
-                    itemCount: _searchResults.length,
-                    itemBuilder: (context, index) {
-                      final user = _searchResults[index];
-                      final userName = user['name'] ?? 'Unknown';
-                      final userPhotoURL = user['photoURL'] ?? 'assets/default_avatar.png';
-                      final userGmail = user['email'] ?? '';
-                      final userContact = user['phone'] ?? '';
-                      return FutureBuilder<DocumentSnapshot>(
-                        future: FirebaseFirestore.instance.collection('custom_ids').doc(user.reference.parent.parent!.id).get(),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData) return const SizedBox.shrink();
-                          final customId = snapshot.data?['customId'] ?? 'Unknown';
-                          return Card(
-                            elevation: 4,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            color: Colors.white.withOpacity(0.95),
-                            margin: const EdgeInsets.symmetric(vertical: 6),
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundImage: userPhotoURL.startsWith('assets/')
-                                    ? AssetImage(userPhotoURL) as ImageProvider
-                                    : NetworkImage(userPhotoURL),
-                                radius: 20,
-                                onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
-                              ),
-                              title: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    userName,
-                                    style: TextStyle(
-                                      color: Colors.teal[900],
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(
-                                    'Email: $userGmail\nPhone: $userContact',
-                                    style: TextStyle(
-                                      color: Colors.teal[600],
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              subtitle: Text(
-                                'ID: $customId',
-                                style: TextStyle(
-                                  color: Colors.teal[800],
-                                  fontSize: 12,
+
+                  // Search & Create Section
+                  SliverToBoxAdapter(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Column(
+                        children: [
+                          // Create Group Button
+                          Container(
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF4ECDC4).withOpacity(0.3),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 8),
                                 ),
-                              ),
-                              onTap: () {
-                                _addChat(customId, userName, userPhotoURL);
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => ChatMessage(
-                                      currentUserCustomId: _currentUserCustomId!,
-                                      selectedCustomId: customId,
-                                      selectedUserName: userName,
-                                      selectedUserPhotoURL: userPhotoURL,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-              Expanded(
-                child: StreamBuilder<DocumentSnapshot>(
-                  stream: currentUser != null
-                      ? FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(currentUser.uid)
-                      .collection('chats')
-                      .doc('chat_list')
-                      .snapshots()
-                      : Stream.empty(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Text(
-                          'Error loading chats: ${snapshot.error}',
-                          style: TextStyle(color: Colors.red[700]),
-                        ),
-                      );
-                    }
-                    if (!snapshot.hasData || !snapshot.data!.exists) {
-                      return const Center(
-                        child: Text(
-                          'No chats available',
-                          style: TextStyle(color: Colors.teal, fontSize: 16),
-                        ),
-                      );
-                    }
-
-                    final chatList = List<Map<String, dynamic>>.from(snapshot.data!['users'] ?? []);
-
-                    return ListView.builder(
-                      itemCount: chatList.length,
-                      itemBuilder: (context, index) {
-                        final chat = chatList[index];
-                        final isGroup = chat['isGroup'] ?? false;
-                        final chatId = chat['customId'];
-                        final unreadCount = _unreadMessageCounts[chatId] ?? 0;
-
-                        return Card(
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          color: Colors.white.withOpacity(0.95),
-                          margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 20),
-                          child: ListTile(
-                            leading: Stack(
-                              children: [
-                                CircleAvatar(
-                                  backgroundImage: chat['photoURL'].startsWith('assets/')
-                                      ? AssetImage(chat['photoURL']) as ImageProvider
-                                      : (chat['photoURL'].startsWith('data:image')
-                                      ? MemoryImage(base64Decode(chat['photoURL'].split(',')[1]))
-                                      : NetworkImage(chat['photoURL'])) as ImageProvider,
-                                  radius: 20,
-                                  onBackgroundImageError: (_, __) => AssetImage('assets/default_avatar.png'),
-                                ),
-                                // Unread message badge
-                                if (unreadCount > 0)
-                                  Positioned(
-                                    right: -2,
-                                    top: -2,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(4),
-                                      decoration: BoxDecoration(
-                                        color: Colors.red,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: Colors.white,
-                                          width: 2,
-                                        ),
-                                      ),
-                                      constraints: const BoxConstraints(
-                                        minWidth: 20,
-                                        minHeight: 20,
-                                      ),
-                                      child: Center(
-                                        child: Text(
-                                          unreadCount > 99 ? '99+' : unreadCount.toString(),
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
                               ],
                             ),
-                            title: Text(
-                              chat['name'],
-                              style: TextStyle(
-                                color: Colors.teal[900],
-                                fontSize: 18,
-                                fontWeight: unreadCount > 0 ? FontWeight.w700 : FontWeight.w600,
+                            child: ElevatedButton.icon(
+                              onPressed: _createGroup,
+                              icon: const Icon(Icons.group_add_rounded, color: Colors.white, size: 22),
+                              label: const Text(
+                                'Create New Group',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF4ECDC4),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 20),
+                                elevation: 0,
                               ),
                             ),
-                            subtitle: isGroup
-                                ? FutureBuilder<DocumentSnapshot>(
-                              future: FirebaseFirestore.instance
-                                  .collection('groups')
-                                  .doc(chat['customId'])
-                                  .get(),
-                              builder: (context, groupSnapshot) {
-                                if (!groupSnapshot.hasData) return const SizedBox.shrink();
-                                final description = groupSnapshot.data?['description'] ?? '';
-                                return Text(
-                                  description.isNotEmpty ? description : 'Group ID: ${chat['customId']}',
-                                  style: TextStyle(
-                                    color: Colors.teal[800],
-                                    fontSize: 12,
-                                  ),
-                                );
-                              },
-                            )
-                                : Text(
-                              'ID: ${chat['customId']}',
-                              style: TextStyle(
-                                color: Colors.teal[800],
-                                fontSize: 12,
-                              ),
-                            ),
-                            onTap: () {
-                              // Reset unread count when opening chat
-                              _resetUnreadCount(chatId);
+                          ),
 
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => ChatMessage(
-                                    currentUserCustomId: _currentUserCustomId!,
-                                    selectedCustomId: chat['customId'],
-                                    selectedUserName: chat['name'],
-                                    selectedUserPhotoURL: chat['photoURL'],
+                          const SizedBox(height: 24),
+
+                          // Search Fields
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.04),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: TextField(
+                              controller: _searchController,
+                              decoration: InputDecoration(
+                                hintText: 'Search users by ID (e.g., ABC123)',
+                                hintStyle: TextStyle(color: Colors.grey[500], fontSize: 15),
+                                prefixIcon: Container(
+                                  margin: const EdgeInsets.all(16),
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF6C63FF).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: const Icon(
+                                    Icons.search_rounded,
+                                    color: Color(0xFF6C63FF),
+                                    size: 20,
+                                  ),
+                                ),
+                                filled: true,
+                                fillColor: Colors.white,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide.none,
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide(color: Colors.grey.withOpacity(0.1)),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: const BorderSide(color: Color(0xFF6C63FF), width: 1.5),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
+                              ),
+                              style: const TextStyle(fontSize: 15, color: Color(0xFF2D3748)),
+                              onChanged: (query) => _searchUsers(query),
+                            ),
+                          ),
+
+                          const SizedBox(height: 20),
+
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.04),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: TextField(
+                              controller: _groupSearchController,
+                              decoration: InputDecoration(
+                                hintText: 'Join group by ID (e.g., ABC123)',
+                                hintStyle: TextStyle(color: Colors.grey[500], fontSize: 15),
+                                prefixIcon: Container(
+                                  margin: const EdgeInsets.all(16),
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF4ECDC4).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: const Icon(
+                                    Icons.group_add_rounded,
+                                    color: Color(0xFF4ECDC4),
+                                    size: 20,
+                                  ),
+                                ),
+                                filled: true,
+                                fillColor: Colors.white,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide.none,
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide(color: Colors.grey.withOpacity(0.1)),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: const BorderSide(color: Color(0xFF4ECDC4), width: 1.5),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
+                              ),
+                              style: const TextStyle(fontSize: 15, color: Color(0xFF2D3748)),
+                              onSubmitted: (query) => _joinGroup(query.toUpperCase()),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Your Groups Section
+                  if (_createdGroups.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(24, 32, 24, 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF4ECDC4).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: const Icon(
+                                    Icons.group_work_rounded,
+                                    color: Color(0xFF4ECDC4),
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Text(
+                                  'Your Groups',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF2D3748),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            ..._createdGroups.map((group) {
+                              final groupId = group['groupId'];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 16),
+                                padding: const EdgeInsets.all(20),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(24),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.04),
+                                      blurRadius: 16,
+                                      offset: const Offset(0, 6),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              colors: [
+                                                const Color(0xFF4ECDC4),
+                                                const Color(0xFF44A08D),
+                                              ],
+                                            ),
+                                            borderRadius: BorderRadius.circular(20),
+                                          ),
+                                          child: const Icon(
+                                            Icons.group_rounded,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                group['name'],
+                                                style: const TextStyle(
+                                                  color: Color(0xFF2D3748),
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                'ID: $groupId',
+                                                style: TextStyle(
+                                                  color: Colors.grey[600],
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF4ECDC4).withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(16),
+                                            ),
+                                            child: IconButton(
+                                              icon: const Icon(Icons.copy_rounded, color: Color(0xFF4ECDC4), size: 16),
+                                              onPressed: () => _copyGroupId(groupId),
+                                              padding: const EdgeInsets.all(12),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF6C63FF).withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(16),
+                                            ),
+                                            child: IconButton(
+                                              icon: const Icon(Icons.share_rounded, color: Color(0xFF6C63FF), size: 16),
+                                              onPressed: () => _shareGroupId(groupId),
+                                              padding: const EdgeInsets.all(12),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFFFB74D).withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(16),
+                                            ),
+                                            child: IconButton(
+                                              icon: const Icon(Icons.people_rounded, color: Color(0xFFFFB74D), size: 16),
+                                              onPressed: () => _showGroupMembers(groupId),
+                                              padding: const EdgeInsets.all(12),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        FutureBuilder<DocumentSnapshot>(
+                                          future: FirebaseFirestore.instance
+                                              .collection('groups')
+                                              .doc(groupId)
+                                              .get(),
+                                          builder: (context, snapshot) {
+                                            if (!snapshot.hasData || !snapshot.data!.exists) {
+                                              return const SizedBox.shrink();
+                                            }
+                                            final isCreator = snapshot.data!['creatorId'] == currentUser?.uid;
+                                            return Row(
+                                              children: [
+                                                if (isCreator) ...[
+                                                  Container(
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(0xFF9C27B0).withOpacity(0.1),
+                                                      borderRadius: BorderRadius.circular(16),
+                                                    ),
+                                                    child: IconButton(
+                                                      icon: const Icon(Icons.edit_rounded, color: Color(0xFF9C27B0), size: 16),
+                                                      onPressed: () => _modifyGroup(groupId),
+                                                      padding: const EdgeInsets.all(12),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 12),
+                                                  Container(
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(0xFFFF6B6B).withOpacity(0.1),
+                                                      borderRadius: BorderRadius.circular(16),
+                                                    ),
+                                                    child: IconButton(
+                                                      icon: const Icon(Icons.delete_rounded, color: Color(0xFFFF6B6B), size: 16),
+                                                      onPressed: () => _deleteGroup(groupId),
+                                                      padding: const EdgeInsets.all(12),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            );
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  // Search Results
+                  if (_searchResults.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF6C63FF).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: const Icon(
+                                    Icons.search_rounded,
+                                    color: Color(0xFF6C63FF),
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Text(
+                                  'Search Results',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF2D3748),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            Container(
+                              height: 200,
+                              child: ListView.builder(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: _searchResults.length,
+                                itemBuilder: (context, index) {
+                                  final user = _searchResults[index];
+                                  final userName = user['name'] ?? 'Unknown';
+                                  final userPhotoURL = user['photoURL'] ?? 'assets/default_avatar.png';
+                                  final userEmail = user['email'] ?? '';
+                                  final userContact = user['phone'] ?? '';
+
+                                  return FutureBuilder<DocumentSnapshot>(
+                                    future: FirebaseFirestore.instance.collection('custom_ids').doc(user.reference.parent.parent!.id).get(),
+                                    builder: (context, snapshot) {
+                                      if (!snapshot.hasData) return const SizedBox.shrink();
+                                      final customId = snapshot.data?['customId'] ?? 'Unknown';
+
+                                      return Container(
+                                        width: 280,
+                                        margin: const EdgeInsets.only(right: 20),
+                                        padding: const EdgeInsets.all(20),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(24),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withOpacity(0.04),
+                                              blurRadius: 16,
+                                              offset: const Offset(0, 6),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  width: 52,
+                                                  height: 52,
+                                                  decoration: BoxDecoration(
+                                                    shape: BoxShape.circle,
+                                                    gradient: LinearGradient(
+                                                      colors: [
+                                                        const Color(0xFF6C63FF),
+                                                        const Color(0xFF4ECDC4),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  child: ClipOval(
+                                                    child: userPhotoURL.startsWith('assets/')
+                                                        ? Image.asset(userPhotoURL, width: 52, height: 52, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.person_rounded, color: Colors.white, size: 24))
+                                                        : Image.network(userPhotoURL, width: 52, height: 52, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.person_rounded, color: Colors.white, size: 24)),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 16),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        userName,
+                                                        style: const TextStyle(
+                                                          color: Color(0xFF2D3748),
+                                                          fontSize: 16,
+                                                          fontWeight: FontWeight.w600,
+                                                        ),
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow.ellipsis,
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        'ID: $customId',
+                                                        style: TextStyle(
+                                                          color: Colors.grey[600],
+                                                          fontSize: 12,
+                                                          fontWeight: FontWeight.w500,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 16),
+                                            if (userEmail.isNotEmpty) ...[
+                                              Text(
+                                                userEmail,
+                                                style: TextStyle(
+                                                  color: Colors.grey[600],
+                                                  fontSize: 13,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 4),
+                                            ],
+                                            if (userContact.isNotEmpty) ...[
+                                              Text(
+                                                userContact,
+                                                style: TextStyle(
+                                                  color: Colors.grey[600],
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 12),
+                                            ],
+                                            const Spacer(),
+                                            Container(
+                                              width: double.infinity,
+                                              decoration: BoxDecoration(
+                                                borderRadius: BorderRadius.circular(20),
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: const Color(0xFF6C63FF).withOpacity(0.2),
+                                                    blurRadius: 12,
+                                                    offset: const Offset(0, 4),
+                                                  ),
+                                                ],
+                                              ),
+                                              child: ElevatedButton(
+                                                onPressed: () {
+                                                  _addChat(customId, userName, userPhotoURL);
+                                                  Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (context) => ChatMessage(
+                                                        currentUserCustomId: _currentUserCustomId!,
+                                                        selectedCustomId: customId,
+                                                        selectedUserName: userName,
+                                                        selectedUserPhotoURL: userPhotoURL,
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                                child: const Text(
+                                                  'Start Chat',
+                                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                                                ),
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor: const Color(0xFF6C63FF),
+                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                                  elevation: 0,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  // Recent Chats Section
+                  SliverToBoxAdapter(
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6C63FF).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Icon(
+                              Icons.chat_rounded,
+                              color: Color(0xFF6C63FF),
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            'Recent Chats',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF2D3748),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Chat List
+                  StreamBuilder<DocumentSnapshot>(
+                    stream: currentUser != null
+                        ? FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(currentUser.uid)
+                        .collection('chats')
+                        .doc('chat_list')
+                        .snapshots()
+                        : Stream.empty(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const SliverToBoxAdapter(
+                          child: Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(40),
+                              child: CircularProgressIndicator(
+                                color: Color(0xFF6C63FF),
+                                strokeWidth: 3,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      if (snapshot.hasError) {
+                        return SliverToBoxAdapter(
+                          child: Container(
+                            padding: const EdgeInsets.all(40),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(20),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFF6B6B).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(24),
+                                  ),
+                                  child: Icon(
+                                    Icons.error_outline_rounded,
+                                    size: 48,
+                                    color: Colors.grey[400],
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Error loading chats',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+                      if (!snapshot.hasData || !snapshot.data!.exists) {
+                        return SliverToBoxAdapter(
+                          child: Container(
+                            padding: const EdgeInsets.all(40),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(32),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF6C63FF).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(32),
+                                  ),
+                                  child: Icon(
+                                    Icons.chat_bubble_outline_rounded,
+                                    size: 48,
+                                    color: const Color(0xFF6C63FF).withOpacity(0.6),
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+                                const Text(
+                                  'No chats yet',
+                                  style: TextStyle(
+                                    color: Color(0xFF2D3748),
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Search for users or join groups to start chatting',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 15,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
+                      final chatList = List<Map<String, dynamic>>.from(snapshot.data!['users'] ?? []);
+
+                      return SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                        sliver: SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                              final chat = chatList[index];
+                              final isGroup = chat['isGroup'] ?? false;
+                              final chatId = chat['customId'];
+                              final unreadCount = _unreadMessageCounts[chatId] ?? 0;
+
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 16),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(24),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.04),
+                                      blurRadius: 16,
+                                      offset: const Offset(0, 6),
+                                    ),
+                                  ],
+                                ),
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(24),
+                                    onTap: () {
+                                      _resetUnreadCount(chatId);
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ChatMessage(
+                                            currentUserCustomId: _currentUserCustomId!,
+                                            selectedCustomId: chat['customId'],
+                                            selectedUserName: chat['name'],
+                                            selectedUserPhotoURL: chat['photoURL'],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(20),
+                                      child: Row(
+                                        children: [
+                                          // Avatar with unread badge
+                                          Stack(
+                                            children: [
+                                              Container(
+                                                width: 58,
+                                                height: 58,
+                                                decoration: BoxDecoration(
+                                                  shape: BoxShape.circle,
+                                                  gradient: LinearGradient(
+                                                    colors: isGroup
+                                                        ? [const Color(0xFF4ECDC4), const Color(0xFF44A08D)]
+                                                        : [const Color(0xFF6C63FF), const Color(0xFF9C88FF)],
+                                                  ),
+                                                ),
+                                                child: ClipOval(
+                                                  child: chat['photoURL'].startsWith('assets/')
+                                                      ? Image.asset(
+                                                    chat['photoURL'],
+                                                    width: 58,
+                                                    height: 58,
+                                                    fit: BoxFit.cover,
+                                                    errorBuilder: (_, __, ___) => Icon(
+                                                      isGroup ? Icons.group_rounded : Icons.person_rounded,
+                                                      color: Colors.white,
+                                                      size: 28,
+                                                    ),
+                                                  )
+                                                      : chat['photoURL'].startsWith('data:image')
+                                                      ? Image.memory(
+                                                    base64Decode(chat['photoURL'].split(',')[1]),
+                                                    width: 58,
+                                                    height: 58,
+                                                    fit: BoxFit.cover,
+                                                    errorBuilder: (_, __, ___) => Icon(
+                                                      isGroup ? Icons.group_rounded : Icons.person_rounded,
+                                                      color: Colors.white,
+                                                      size: 28,
+                                                    ),
+                                                  )
+                                                      : Image.network(
+                                                    chat['photoURL'],
+                                                    width: 58,
+                                                    height: 58,
+                                                    fit: BoxFit.cover,
+                                                    errorBuilder: (_, __, ___) => Icon(
+                                                      isGroup ? Icons.group_rounded : Icons.person_rounded,
+                                                      color: Colors.white,
+                                                      size: 28,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+
+                                              // Unread badge
+                                              if (unreadCount > 0)
+                                                Positioned(
+                                                  right: 0,
+                                                  top: 0,
+                                                  child: Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(0xFFFF6B6B),
+                                                      borderRadius: BorderRadius.circular(16),
+                                                      border: Border.all(color: Colors.white, width: 3),
+                                                      boxShadow: [
+                                                        BoxShadow(
+                                                          color: const Color(0xFFFF6B6B).withOpacity(0.3),
+                                                          blurRadius: 8,
+                                                          offset: const Offset(0, 2),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    constraints: const BoxConstraints(
+                                                      minWidth: 22,
+                                                      minHeight: 22,
+                                                    ),
+                                                    child: Text(
+                                                      unreadCount > 99 ? '99+' : unreadCount.toString(),
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 11,
+                                                        fontWeight: FontWeight.w700,
+                                                      ),
+                                                      textAlign: TextAlign.center,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+
+                                          const SizedBox(width: 20),
+
+                                          // Chat info
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  chat['name'],
+                                                  style: TextStyle(
+                                                    color: const Color(0xFF2D3748),
+                                                    fontSize: 17,
+                                                    fontWeight: unreadCount > 0 ? FontWeight.w700 : FontWeight.w600,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                                const SizedBox(height: 6),
+                                                isGroup
+                                                    ? FutureBuilder<DocumentSnapshot>(
+                                                  future: FirebaseFirestore.instance
+                                                      .collection('groups')
+                                                      .doc(chat['customId'])
+                                                      .get(),
+                                                  builder: (context, groupSnapshot) {
+                                                    if (!groupSnapshot.hasData) return const SizedBox.shrink();
+                                                    final description = groupSnapshot.data?['description'] ?? '';
+                                                    return Text(
+                                                      description.isNotEmpty ? description : 'Group Chat • ${chat['customId']}',
+                                                      style: TextStyle(
+                                                        color: Colors.grey[600],
+                                                        fontSize: 14,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                    );
+                                                  },
+                                                )
+                                                    : Text(
+                                                  'ID: ${chat['customId']}',
+                                                  style: TextStyle(
+                                                    color: Colors.grey[600],
+                                                    fontSize: 14,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+
+                                          // Arrow icon
+                                          Container(
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey.withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                            child: Icon(
+                                              Icons.arrow_forward_ios_rounded,
+                                              color: Colors.grey[500],
+                                              size: 14,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 ),
                               );
                             },
+                            childCount: chatList.length,
                           ),
-                        );
-                      },
-                    );
-                  },
-                ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
