@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
+import 'package:fyp/Add%20Job%20Module/ManageApplicantPage.dart';
+import 'package:fyp/Task%20Progress/ProgressTracker.dart';
+import 'package:fyp/Task%20Progress/TaskProgressPage.dart';
 import '../Add Job Module/RecurringTasksManager.dart';
 import '../Add Job Module/TaskDependenciesManager.dart';
-import '../Task Progress/TaskProgressTracker.dart';
 import '../Add%20Job%20Module/JobDetailPage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
@@ -184,12 +186,17 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   Widget _buildQuickActionsSection() {
     final actions = [
       {
-        'title': 'Progress Tracker',
-        'icon': Icons.analytics,
+        'title': 'Manage Tasks',
+        'icon': Icons.task,
         'color': Colors.blue,
         'onTap': () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const TaskProgressTracker()),
+          MaterialPageRoute(
+            builder: (context) => const ManageApplicantsPage(
+              jobId: '',
+              jobPosition: 'All Tasks', // Generic title for task management
+            ),
+          ),
         ),
       },
       {

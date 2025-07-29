@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -15,6 +17,9 @@ class _RealtimeLeaderboardState extends State<RealtimeLeaderboard>
   late TabController _tabController;
   String? _currentUserId;
 
+  // Stream subscriptions for cleanup
+  StreamSubscription? _leaderboardSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -25,163 +30,247 @@ class _RealtimeLeaderboardState extends State<RealtimeLeaderboard>
   @override
   void dispose() {
     _tabController.dispose();
+    _leaderboardSubscription?.cancel();
     super.dispose();
   }
 
   Widget _buildLeaderboardStream(String period) {
-    DateTime cutoffDate;
-    switch (period) {
-      case 'weekly':
-        cutoffDate = DateTime.now().subtract(const Duration(days: 7));
-        break;
-      case 'monthly':
-        cutoffDate = DateTime.now().subtract(const Duration(days: 30));
-        break;
-      default: // all-time
-        cutoffDate = DateTime(2020); // Far in the past for all-time
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _getLeaderboardStream(period),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          print('Leaderboard error: ${snapshot.error}');
+          return _buildErrorWidget('Error loading leaderboard: ${snapshot.error}');
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _buildLoadingWidget();
+        }
+
+        final leaderboardData = snapshot.data ?? [];
+
+        if (leaderboardData.isEmpty) {
+          return _buildEmptyWidget();
+        }
+
+        return _buildLeaderboardList(leaderboardData);
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>?> _processUserData(String userId, String period) async {
+    try {
+      print('🔍 Processing user: $userId for period: $period');
+
+      String userName = 'Unknown User';
+      String photoURL = '';
+      int points = 0;
+      Timestamp? lastUpdate;
+
+      // Get user profile data INCLUDING POINTS
+      try {
+        final profileDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('profiledetails')
+            .doc('profile')
+            .get();
+
+        if (profileDoc.exists) {
+          final profileData = profileDoc.data()!;
+
+          // Print all profile data for debugging
+          print('📄 Profile data for $userId: $profileData');
+
+          userName = profileData['name'] ?? 'Unknown User';
+          photoURL = profileData['photoURL'] ?? '';
+          lastUpdate = profileData['lastPointsUpdate'];
+
+          // Get points directly from profile - check multiple possible field names
+          dynamic profilePointsRaw = profileData['points'];
+          int points = 0;
+
+          if (profilePointsRaw != null) {
+            if (profilePointsRaw is int) {
+              points = profilePointsRaw;
+            } else if (profilePointsRaw is double) {
+              points = profilePointsRaw.toInt();
+            } else if (profilePointsRaw is String) {
+              points = int.tryParse(profilePointsRaw) ?? 0;
+            } else {
+              // Handle other types like num
+              points = (profilePointsRaw as num?)?.toInt() ?? 0;
+            }
+            print('💰 Found points in profile: $profilePointsRaw (type: ${profilePointsRaw.runtimeType}) -> parsed to: $points');
+          } else {
+            // Try alternative field names only if 'points' doesn't exist
+            var altPoints = profileData['Points'] ??
+                profileData['totalPoints'] ??
+                profileData['point'];
+
+            if (altPoints != null) {
+              if (altPoints is int) {
+                points = altPoints;
+              } else if (altPoints is double) {
+                points = altPoints.toInt();
+              } else if (altPoints is String) {
+                points = int.tryParse(altPoints) ?? 0;
+              } else {
+                points = (altPoints as num?)?.toInt() ?? 0;
+              }
+              print('💰 Found points in alternative field: $altPoints -> parsed to: $points');
+            } else {
+              print('❌ No points field found in profile document');
+              print('Available fields: ${profileData.keys.toList()}');
+            }
+          }
+
+          print('👤 Found profile for $userId: $userName with $points points');
+        } else {
+          print('❌ No profile document found for $userId');
+        }
+      } catch (e) {
+        print('⚠️ Error fetching profile for $userId: $e');
+      }
+
+      // If no profile found, try main user document
+      if (userName == 'Unknown User') {
+        try {
+          final userDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userId)
+              .get();
+
+          if (userDoc.exists) {
+            final userData = userDoc.data()!;
+            print('📄 Main user data for $userId: $userData');
+
+            userName = userData['name'] ?? userData['displayName'] ?? 'Unknown User';
+            photoURL = userData['photoURL'] ?? '';
+
+            // Also check for points in main user document as fallback
+            if (points == 0) {
+              var userPoints = userData['points'] ??
+                  userData['Points'] ??
+                  userData['totalPoints'] ??
+                  userData['point'];
+
+              if (userPoints != null) {
+                if (userPoints is int) {
+                  points = userPoints;
+                } else if (userPoints is double) {
+                  points = userPoints.toInt();
+                } else if (userPoints is String) {
+                  points = int.tryParse(userPoints) ?? 0;
+                }
+                print('💰 Found points in main user doc: $userPoints');
+              }
+            }
+          }
+        } catch (e) {
+          print('⚠️ No main user document found for $userId');
+        }
+      }
+
+      print('💰 Final points for $userId: $points');
+
+      int completedJobs = 0;
+
+      // GET COMPLETED JOBS (simplified for debugging)
+      try {
+        final jobsQuery = FirebaseFirestore.instance
+            .collection('jobs')
+            .where('acceptedApplicants', arrayContains: userId)
+            .where('isCompleted', isEqualTo: true);
+
+        final jobsSnapshot = await jobsQuery.get();
+        completedJobs = jobsSnapshot.docs.length;
+        print('💼 Total completed jobs for $userId: $completedJobs');
+      } catch (e) {
+        print('❗ Error fetching jobs for $userId: $e');
+      }
+
+      final result = {
+        'userId': userId,
+        'name': userName,
+        'photoURL': photoURL,
+        'points': points,
+        'completedJobs': completedJobs,
+        'isCurrentUser': userId == _currentUserId,
+        'lastUpdate': lastUpdate ?? Timestamp.now(),
+      };
+
+      print('✅ Final result for $userId: $result');
+
+      return result;
+
+    } catch (e) {
+      print('❗ Error processing user data for $userId: $e');
+      return null;
     }
+  }
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .snapshots(),
-      builder: (context, usersSnapshot) {
-        if (usersSnapshot.hasError) {
-          return Center(
-            child: Text(
-              'Error loading leaderboard',
-              style: GoogleFonts.poppins(color: Colors.red),
-            ),
-          );
+  Stream<List<Map<String, dynamic>>> _getLeaderboardStream(String period) {
+    return FirebaseFirestore.instance
+        .collection('users')
+        .snapshots()
+        .asyncMap((usersSnapshot) async {
+      print('📊 Found ${usersSnapshot.docs.length} users in collection');
+
+      // Print all user IDs for debugging
+      print('📝 User IDs found: ${usersSnapshot.docs.map((doc) => doc.id).toList()}');
+
+      List<Map<String, dynamic>> leaderboardData = [];
+
+      // Process each user
+      for (var userDoc in usersSnapshot.docs) {
+        try {
+          print('🔍 Processing user: ${userDoc.id}');
+          final userData = await _processUserData(userDoc.id, period);
+
+          if (userData != null) {
+            leaderboardData.add(userData);
+            print('✅ Added user ${userDoc.id} to leaderboard');
+          } else {
+            print('❌ Skipped user ${userDoc.id} - userData is null');
+          }
+        } catch (e) {
+          print('❗ Error processing user ${userDoc.id}: $e');
         }
+      }
 
-        if (usersSnapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+      print('📋 Final leaderboard data count: ${leaderboardData.length}');
 
-        return FutureBuilder<List<Map<String, dynamic>>>(
-          future: _buildLeaderboardData(usersSnapshot.data!.docs, period, cutoffDate),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
+      // Sort by points (descending), then by completed jobs as tiebreaker
+      leaderboardData.sort((a, b) {
+        int pointsComparison = (b['points'] as int).compareTo(a['points'] as int);
+        if (pointsComparison != 0) return pointsComparison;
 
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.leaderboard,
-                      size: 64,
-                      color: Colors.grey[400],
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'No data available',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
+        // If points are equal, sort by completed jobs
+        return (b['completedJobs'] as int).compareTo(a['completedJobs'] as int);
+      });
 
-            final leaderboardData = snapshot.data!;
-            return ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: leaderboardData.length,
-              itemBuilder: (context, index) {
-                return _buildLeaderboardItem(leaderboardData[index], index);
-              },
-            );
-          },
+      return leaderboardData;
+    });
+  }
+
+  Widget _buildLeaderboardList(List<Map<String, dynamic>> leaderboardData) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: leaderboardData.length,
+      itemBuilder: (context, index) {
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          child: _buildLeaderboardItem(leaderboardData[index], index),
         );
       },
     );
   }
 
-  Future<List<Map<String, dynamic>>> _buildLeaderboardData(
-      List<QueryDocumentSnapshot> userDocs, String period, DateTime cutoffDate) async {
-    List<Map<String, dynamic>> leaderboardData = [];
-
-    for (var userDoc in userDocs) {
-      try {
-        // Get user profile
-        final profileDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userDoc.id)
-            .collection('profiledetails')
-            .doc('profile')
-            .get();
-
-        if (!profileDoc.exists) continue;
-
-        final profileData = profileDoc.data()!;
-
-        // Calculate points based on period
-        int points = 0;
-        int completedJobs = 0;
-
-        if (period == 'all-time') {
-          points = (profileData['points'] ?? 0) as int;
-        } else {
-          // Get points from history within the period
-          final pointsHistorySnapshot = await FirebaseFirestore.instance
-              .collection('users')
-              .doc(userDoc.id)
-              .collection('pointsHistory')
-              .where('timestamp', isGreaterThan: Timestamp.fromDate(cutoffDate))
-              .where('points', isGreaterThan: 0) // Only positive points (earned, not spent)
-              .get();
-
-          for (var doc in pointsHistorySnapshot.docs) {
-            points += (doc.data()['points'] ?? 0) as int;
-          }
-        }
-
-        // Get completed jobs count
-        final jobsSnapshot = await FirebaseFirestore.instance
-            .collection('jobs')
-            .where('acceptedApplicants', arrayContains: userDoc.id)
-            .where('isCompleted', isEqualTo: true)
-            .get();
-
-        if (period != 'all-time') {
-          completedJobs = jobsSnapshot.docs.where((doc) {
-            final completedAt = doc.data()['completedAt'] as Timestamp?;
-            return completedAt != null && completedAt.toDate().isAfter(cutoffDate);
-          }).length;
-        } else {
-          completedJobs = jobsSnapshot.docs.length;
-        }
-
-        if (points > 0 || completedJobs > 0) {
-          leaderboardData.add({
-            'userId': userDoc.id,
-            'name': profileData['name'] ?? 'Unknown User',
-            'photoURL': profileData['photoURL'] ?? '',
-            'points': points,
-            'completedJobs': completedJobs,
-            'isCurrentUser': userDoc.id == _currentUserId,
-          });
-        }
-      } catch (e) {
-        print('Error processing user ${userDoc.id}: $e');
-      }
-    }
-
-    // Sort by points (descending)
-    leaderboardData.sort((a, b) => (b['points'] as int).compareTo(a['points'] as int));
-
-    return leaderboardData;
-  }
-
   Widget _buildLeaderboardItem(Map<String, dynamic> userData, int index) {
     final isCurrentUser = userData['isCurrentUser'] as bool;
     final rank = index + 1;
+    final lastUpdate = userData['lastUpdate'] as Timestamp?;
 
     Color rankColor = Colors.grey;
     IconData? rankIcon;
@@ -240,15 +329,34 @@ class _RealtimeLeaderboardState extends State<RealtimeLeaderboard>
             ),
             const SizedBox(width: 16),
 
-            // User Avatar
-            CircleAvatar(
-              radius: 25,
-              backgroundImage: userData['photoURL'].isNotEmpty
-                  ? NetworkImage(userData['photoURL'])
-                  : null,
-              child: userData['photoURL'].isEmpty
-                  ? const Icon(Icons.person, size: 30)
-                  : null,
+            // User Avatar with live indicator
+            Stack(
+              children: [
+                CircleAvatar(
+                  radius: 25,
+                  backgroundImage: userData['photoURL'].isNotEmpty
+                      ? _getImageProvider(userData['photoURL'])
+                      : null,
+                  backgroundColor: Colors.grey[200],
+                  child: userData['photoURL'].isEmpty
+                      ? const Icon(Icons.person, size: 30, color: Colors.grey)
+                      : null,
+                ),
+                if (_isRecentlyUpdated(lastUpdate))
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(width: 16),
 
@@ -259,12 +367,15 @@ class _RealtimeLeaderboardState extends State<RealtimeLeaderboard>
                 children: [
                   Row(
                     children: [
-                      Text(
-                        userData['name'],
-                        style: GoogleFonts.poppins(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: isCurrentUser ? const Color(0xFF006D77) : Colors.black,
+                      Flexible(
+                        child: Text(
+                          userData['name'],
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: isCurrentUser ? const Color(0xFF006D77) : Colors.black,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (isCurrentUser) ...[
@@ -337,6 +448,104 @@ class _RealtimeLeaderboardState extends State<RealtimeLeaderboard>
     );
   }
 
+  bool _isRecentlyUpdated(Timestamp? lastUpdate) {
+    if (lastUpdate == null) return false;
+    final now = DateTime.now();
+    final updateTime = lastUpdate.toDate();
+    return now.difference(updateTime).inMinutes < 5;
+  }
+
+  Widget _buildLoadingWidget() {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF006D77)),
+          ),
+          SizedBox(height: 16),
+          Text('Loading leaderboard...'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorWidget(String error) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.error_outline,
+            size: 64,
+            color: Colors.red[400],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Error loading leaderboard',
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              color: Colors.red[600],
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Text(
+              error,
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () => setState(() {}),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF006D77),
+            ),
+            child: const Text('Retry', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyWidget() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.leaderboard,
+            size: 64,
+            color: Colors.grey[400],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'No data available',
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              color: Colors.grey[600],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Complete some jobs to appear on the leaderboard!',
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: Colors.grey[500],
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -350,17 +559,53 @@ class _RealtimeLeaderboardState extends State<RealtimeLeaderboard>
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: Text(
-            'Leaderboard',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
-            ),
+          title: Row(
+            children: [
+              Text(
+                'Leaderboard',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.green,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'LIVE',
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           backgroundColor: const Color(0xFF006D77),
+          elevation: 0,
           bottom: TabBar(
             controller: _tabController,
             indicatorColor: Colors.white,
+            indicatorWeight: 3,
             labelColor: Colors.white,
             unselectedLabelColor: Colors.white.withOpacity(0.7),
             labelStyle: GoogleFonts.poppins(fontWeight: FontWeight.w600),
@@ -381,5 +626,17 @@ class _RealtimeLeaderboardState extends State<RealtimeLeaderboard>
         ),
       ),
     );
+  }
+}
+ImageProvider _getImageProvider(String photoURL) {
+  if (photoURL.startsWith('assets/')) {
+    // It's a local asset
+    return AssetImage(photoURL);
+  } else if (photoURL.startsWith('http')) {
+    // It's a network image
+    return NetworkImage(photoURL);
+  } else {
+    // Default to AssetImage for other cases
+    return AssetImage(photoURL);
   }
 }

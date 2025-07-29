@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import 'package:fyp/Add%20Job%20Module/EditingJobsPage.dart';
-import 'package:fyp/Login%20Signup/Screen/home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fyp/module/ChatMessage.dart';
 
@@ -47,10 +45,20 @@ class _JobDetailPageState extends State<JobDetailPage> {
 
   Future<void> _checkOwnership() async {
     final user = FirebaseAuth.instance.currentUser!;
-    print('Checking ownership: postedBy=${widget.data['postedBy']}, userUid=${user.uid}');
-    setState(() {
-      _isOwner = widget.data['postedBy'] == user.uid;
-    });
+    // Fetch job document to ensure accurate postedBy
+    final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(widget.jobId).get();
+    if (jobDoc.exists) {
+      final data = jobDoc.data() as Map<String, dynamic>;
+      print('Checking ownership: postedBy=${data['postedBy']}, userUid=${user.uid}');
+      setState(() {
+        _isOwner = data['postedBy'] == user.uid;
+      });
+    } else {
+      print('Job document not found for jobId=${widget.jobId}');
+      setState(() {
+        _isOwner = false;
+      });
+    }
   }
 
   Future<bool> _checkProfileCompleteness() async {
@@ -287,6 +295,137 @@ class _JobDetailPageState extends State<JobDetailPage> {
     }
   }
 
+  Future<void> _markJobComplete() async {
+    final user = FirebaseAuth.instance.currentUser!;
+    if (!_isOwner || _isLoading) return;
+
+    setState(() => _isLoading = true);
+    try {
+      // Fetch the job document to get accepted applicants
+      final jobDoc = await FirebaseFirestore.instance
+          .collection('jobs')
+          .doc(widget.jobId)
+          .get();
+
+      if (!jobDoc.exists) {
+        _showSnackBar('Job not found.', Colors.redAccent);
+        return;
+      }
+
+      final acceptedApplicants = List<String>.from(jobDoc.data()!['acceptedApplicants'] ?? []);
+
+      if (acceptedApplicants.isEmpty) {
+        _showSnackBar('No accepted applicants to mark as complete.', Colors.redAccent);
+        return;
+      }
+
+      // Award points and mark task as complete for each accepted applicant
+      for (String userId in acceptedApplicants) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('taskProgress')
+            .doc(widget.jobId)
+            .update({
+          'status': 'Completed',
+          'currentProgress': 100.0,
+          'completionApproved': true,
+          'completedAt': Timestamp.now(),
+          'lastUpdated': Timestamp.now(),
+        });
+
+        // Add history entry
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('taskProgress')
+            .doc(widget.jobId)
+            .collection('history')
+            .add({
+          'progress': 100.0,
+          'status': 'Completed',
+          'notes': 'Task marked as complete by employer (test)',
+          'timestamp': Timestamp.now(),
+          'action': 'task_completed',
+        });
+
+        // Award 100 points
+        const int pointsToAward = 100;
+        final profileRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('profiledetails')
+            .doc('profile');
+
+        await FirebaseFirestore.instance.runTransaction((transaction) async {
+          final profileDoc = await transaction.get(profileRef);
+          final currentPoints = (profileDoc.data()?['points'] ?? 0) as int;
+          transaction.update(profileRef, {
+            'points': currentPoints + pointsToAward,
+            'lastPointsUpdate': Timestamp.now(),
+          });
+        });
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('pointsHistory')
+            .add({
+          'points': pointsToAward,
+          'source': 'task_completion',
+          'jobId': widget.jobId,
+          'jobTitle': widget.data['jobPosition'] ?? 'N/A',
+          'timestamp': Timestamp.now(),
+          'description': 'Completed task: ${widget.data['jobPosition'] ?? 'N/A'} (test)',
+        });
+
+        // Notify the applicant
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('notifications')
+            .add({
+          'message': 'Your task "${widget.data['jobPosition'] ?? 'N/A'}" has been marked as complete! 100 points awarded.',
+          'timestamp': Timestamp.now(),
+          'read': false,
+          'type': 'completion_approved',
+          'jobId': widget.jobId,
+        });
+      }
+
+      // Update job overall progress
+      await FirebaseFirestore.instance
+          .collection('jobs')
+          .doc(widget.jobId)
+          .update({
+        'overallProgress': 100.0,
+        'completedTasks': acceptedApplicants.length,
+        'totalTasks': acceptedApplicants.length,
+        'isFull': true,
+        'lastUpdated': Timestamp.now(),
+      });
+
+      _showSnackBar('Job marked as complete for all accepted applicants! 100 points awarded each.', Colors.green);
+    } catch (e) {
+      print('Error marking job complete: $e');
+      _showSnackBar('Error marking job complete: $e', Colors.redAccent);
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _showSnackBar(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: GoogleFonts.poppins()),
+        backgroundColor: color,
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
   TimeOfDay _parseTimeOfDay(String timeStr) {
     timeStr = timeStr.trim().toUpperCase().replaceAll(' ', '');
     String period = 'AM';
@@ -385,7 +524,53 @@ class _JobDetailPageState extends State<JobDetailPage> {
               child: Column(
                 children: [
                   if (_isOwner)
-                    const Text('You cannot apply to your own job', style: TextStyle(fontSize: 16, color: Colors.grey))
+                    Column(
+                      children: [
+                        const Text('You cannot apply to your own job', style: TextStyle(fontSize: 16, color: Colors.grey)),
+                        const SizedBox(height: 10),
+                        ElevatedButton(
+                          onPressed: _isLoading
+                              ? null
+                              : () {
+                            showDialog(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: Text('Confirm Completion', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                                content: Text(
+                                  'Mark job "${widget.data['jobPosition'] ?? 'N/A'}" as complete for all accepted applicants?',
+                                  style: GoogleFonts.poppins(),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: Text('Cancel', style: GoogleFonts.poppins()),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      _markJobComplete();
+                                    },
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                                    child: Text('Confirm', style: GoogleFonts.poppins(color: Colors.white)),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.teal,
+                            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: _isLoading
+                              ? const CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                              : Text(
+                            'Mark as Complete',
+                            style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+                          ),
+                        ),
+                      ],
+                    )
                   else
                     _isLoading
                         ? const CircularProgressIndicator(color: Colors.teal)

@@ -2,9 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:fyp/Add%20Job%20Module/JobDetailPage.dart';
 import '../Notification Module/NotificationService.dart';
-import '../Task Progress/TaskProgressTrackerDetail.dart'; // Ensure this import is correct
+import '../Task Progress/ProgressTracker.dart';
 
 class ManageApplicantsPage extends StatefulWidget {
   final String jobId;
@@ -63,10 +62,15 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
 
         double progress = 0.0;
         String status = 'Not Started';
+        bool completionRequested = false;
+        bool completionApproved = false;
+
         if (progressDoc.exists) {
           final progressData = progressDoc.data()!;
           progress = (progressData['currentProgress'] ?? 0.0).toDouble();
           status = progressData['status'] ?? 'Not Started';
+          completionRequested = progressData['completionRequested'] ?? false;
+          completionApproved = progressData['completionApproved'] ?? false;
         }
 
         performanceList.add({
@@ -75,6 +79,8 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
           'progress': progress,
           'status': status,
           'efficiency': _calculateEfficiency(progress, status),
+          'completionRequested': completionRequested,
+          'completionApproved': completionApproved,
         });
       }
 
@@ -90,6 +96,7 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
     switch (status) {
       case 'Completed': return 100.0;
       case 'In Progress': return progress * 0.8;
+      case 'Pending Review': return progress * 0.9;
       case 'On Hold': return progress * 0.5;
       case 'Not Started': return 0.0;
       default: return progress * 0.7;
@@ -152,6 +159,23 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
         'notes': '',
         'createdAt': Timestamp.now(),
         'lastUpdated': Timestamp.now(),
+        'completionRequested': false,
+        'completionApproved': false,
+        'userId': applicantId,
+      });
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(applicantId)
+          .collection('taskProgress')
+          .doc(widget.jobId)
+          .collection('history')
+          .add({
+        'progress': 0.0,
+        'status': 'Not Started',
+        'notes': 'Task assigned',
+        'timestamp': Timestamp.now(),
+        'action': 'task_assigned',
       });
     } catch (e) {
       print('Error creating task progress: $e');
@@ -254,13 +278,141 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
     );
   }
 
+  Future<void> _markTaskComplete(String applicantId, String applicantName) async {
+    try {
+      // Show confirmation dialog
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: Text(
+            'Confirm Task Completion',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+          ),
+          content: Text(
+            'Are you sure you want to mark the task for $applicantName as complete? This will award 100 points.',
+            style: GoogleFonts.poppins(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancel', style: GoogleFonts.poppins()),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF006D77),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: Text(
+                'Confirm',
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      // Update task progress to completed
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(applicantId)
+          .collection('taskProgress')
+          .doc(widget.jobId)
+          .update({
+        'status': 'Completed',
+        'currentProgress': 100.0,
+        'completionApproved': true,
+        'lastUpdated': Timestamp.now(),
+      });
+
+      // Add history entry
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(applicantId)
+          .collection('taskProgress')
+          .doc(widget.jobId)
+          .collection('history')
+          .add({
+        'progress': 100.0,
+        'status': 'Completed',
+        'notes': 'Task marked as complete by employer',
+        'timestamp': Timestamp.now(),
+        'action': 'task_completed',
+      });
+
+      // Award points (100 points for completion)
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final profileRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(applicantId)
+            .collection('profiledetails')
+            .doc('profile');
+
+        final profileDoc = await transaction.get(profileRef);
+        final currentPoints = (profileDoc.data()?['points'] ?? 0) as int;
+
+        transaction.update(profileRef, {
+          'points': currentPoints + 100,
+          'lastPointsUpdate': Timestamp.now(),
+        });
+
+        // Add to points history
+        final pointsHistoryRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(applicantId)
+            .collection('pointsHistory')
+            .doc();
+
+        transaction.set(pointsHistoryRef, {
+          'points': 100,
+          'source': 'task_completion',
+          'itemName': widget.jobPosition,
+          'timestamp': Timestamp.now(),
+          'description': 'Completed task: ${widget.jobPosition}',
+        });
+      });
+
+      // Notify user
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(applicantId)
+          .collection('notifications')
+          .add({
+        'message': 'Your task "${widget.jobPosition}" has been marked as complete! You earned 100 points.',
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+        'type': 'task_completion',
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Task marked as complete and points awarded')),
+      );
+
+      _loadTeamPerformanceData();
+    } catch (e) {
+      print('Error marking task complete: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error marking task complete: $e')),
+      );
+    }
+  }
+
   void _viewApplicantProgress(String applicantId, String applicantName) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => TaskProgressTrackerDetail(
-          taskId: widget.jobId,
-          taskTitle: '${widget.jobPosition} - $applicantName',
+        builder: (context) => ProgressTrackerPage(
+          jobId: widget.jobId,
+          jobTitle: '${widget.jobPosition} - $applicantName',
+          isEmployer: true,
         ),
       ),
     );
@@ -360,12 +512,34 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
                                   fontSize: 14,
                                 ),
                               ),
-                              Text(
-                                'Status: ${member['status']}',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.grey[600],
-                                ),
+                              Row(
+                                children: [
+                                  Text(
+                                    'Status: ${member['status']}',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  if (member['completionRequested'] == true) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.orange[100],
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        'Completion Requested',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.orange[700],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ],
                           ),
@@ -381,12 +555,21 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
                             ),
                             const SizedBox(width: 8),
                             IconButton(
-                              icon: const Icon(Icons.analytics, color: Color(0xFF006D77)),
+                              icon: Icon(
+                                member['completionRequested'] == true
+                                    ? Icons.pending_actions
+                                    : Icons.analytics,
+                                color: member['completionRequested'] == true
+                                    ? Colors.orange
+                                    : const Color(0xFF006D77),
+                              ),
                               onPressed: () => _viewApplicantProgress(
                                 member['userId'],
                                 member['name'],
                               ),
-                              tooltip: 'View Progress',
+                              tooltip: member['completionRequested'] == true
+                                  ? 'Review Completion Request'
+                                  : 'View Progress',
                             ),
                           ],
                         ),
@@ -414,7 +597,8 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
     switch (status) {
       case 'Completed': return Colors.green;
       case 'In Progress': return Colors.blue;
-      case 'On Hold': return Colors.orange;
+      case 'Pending Review': return Colors.orange;
+      case 'On Hold': return Colors.amber;
       case 'Not Started': return Colors.grey;
       case 'Cancelled': return Colors.red;
       default: return Colors.grey;
@@ -649,12 +833,18 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
                                             trailing: Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                if (isAccepted)
+                                                if (isAccepted) ...[
                                                   IconButton(
                                                     icon: const Icon(Icons.analytics, color: Colors.blue),
                                                     onPressed: () => _viewApplicantProgress(applicantId, name),
                                                     tooltip: 'View Progress',
                                                   ),
+                                                  IconButton(
+                                                    icon: const Icon(Icons.check_circle, color: Colors.green),
+                                                    onPressed: () => _markTaskComplete(applicantId, name),
+                                                    tooltip: 'Mark as Complete',
+                                                  ),
+                                                ],
                                                 if (!isAccepted && !isRejected) ...[
                                                   IconButton(
                                                     icon: const Icon(Icons.check, color: Colors.green),
@@ -692,9 +882,10 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => TaskProgressTrackerDetail(
-                  taskId: widget.jobId,
-                  taskTitle: widget.jobPosition,
+                builder: (context) => ProgressTrackerPage(
+                  jobId: widget.jobId,
+                  jobTitle: widget.jobPosition,
+                  isEmployer: true,
                 ),
               ),
             );

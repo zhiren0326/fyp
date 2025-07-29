@@ -592,7 +592,7 @@ class _RewardsPageState extends State<RewardsPage> {
             CircleAvatar(
               radius: 30,
               backgroundImage: performer['photoURL'].isNotEmpty
-                  ? NetworkImage(performer['photoURL'])
+                  ? _getImageProvider(performer['photoURL'])
                   : null,
               backgroundColor: Colors.grey[200],
               child: performer['photoURL'].isEmpty
@@ -825,5 +825,18 @@ class _RewardsPageState extends State<RewardsPage> {
         ),
       ),
     );
+  }
+}
+
+ImageProvider _getImageProvider(String photoURL) {
+  if (photoURL.startsWith('assets/')) {
+    // It's a local asset
+    return AssetImage(photoURL);
+  } else if (photoURL.startsWith('http')) {
+    // It's a network image
+    return NetworkImage(photoURL);
+  } else {
+    // Default to AssetImage for other cases
+    return AssetImage(photoURL);
   }
 }
