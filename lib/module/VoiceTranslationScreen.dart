@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:translator/translator.dart';
 import 'package:file_picker/file_picker.dart';
@@ -22,7 +21,7 @@ class VoiceTranslationScreen extends StatefulWidget {
 }
 
 class _VoiceTranslationScreenState extends State<VoiceTranslationScreen> {
-  final SpeechToText _speechToText = SpeechToText();
+
   final FlutterTts _flutterTts = FlutterTts();
   final GoogleTranslator _translator = GoogleTranslator();
 
@@ -52,7 +51,6 @@ class _VoiceTranslationScreenState extends State<VoiceTranslationScreen> {
   @override
   void initState() {
     super.initState();
-    _initializeSpeech();
     _initializeTts();
 
     // If voice message data is provided, extract the file path
@@ -77,12 +75,6 @@ class _VoiceTranslationScreenState extends State<VoiceTranslationScreen> {
     }
   }
 
-  void _initializeSpeech() async {
-    bool available = await _speechToText.initialize();
-    if (!available) {
-      print('Speech to text not available');
-    }
-  }
 
   void _initializeTts() async {
     await _flutterTts.setLanguage(_selectedLanguage);
@@ -125,81 +117,17 @@ class _VoiceTranslationScreenState extends State<VoiceTranslationScreen> {
     try {
       // For recorded files, we need to use live listening as most packages
       // don't support direct audio file transcription
-      bool available = await _speechToText.initialize();
-      if (available) {
-        setState(() {
-          _isListening = true;
-        });
 
-        // Show dialog to ask user to play the recording and speak
-        await _showPlayAndSpeakDialog();
-      }
     } catch (e) {
       throw Exception('Failed to convert voice to text: $e');
     }
   }
 
-  // Show dialog asking user to replay the audio and speak
-  Future<void> _showPlayAndSpeakDialog() async {
-    return showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('Voice Recognition'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Please play your recording and speak clearly into the microphone.'),
-              SizedBox(height: 20),
-              _isListening
-                  ? Column(
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 10),
-                  Text('Listening...'),
-                ],
-              )
-                  : ElevatedButton(
-                onPressed: _startListening,
-                child: Text('Start Listening'),
-              ),
-              if (_recognizedText.isNotEmpty) ...[
-                SizedBox(height: 10),
-                Text('Recognized: $_recognizedText'),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: _stopListening,
-              child: Text('Done'),
-            ),
-          ],
-        );
-      },
-    );
-  }
 
-  // Start listening for speech
-  void _startListening() async {
-    await _speechToText.listen(
-      onResult: (result) {
-        setState(() {
-          _recognizedText = result.recognizedWords;
-        });
-      },
-      listenFor: Duration(seconds: 30),
-      pauseFor: Duration(seconds: 3),
-    );
-    setState(() {
-      _isListening = true;
-    });
-  }
+
 
   // Stop listening
   void _stopListening() async {
-    await _speechToText.stop();
     setState(() {
       _isListening = false;
     });
@@ -408,7 +336,6 @@ class _VoiceTranslationScreenState extends State<VoiceTranslationScreen> {
 
   @override
   void dispose() {
-    _speechToText.cancel();
     _flutterTts.stop();
     super.dispose();
   }

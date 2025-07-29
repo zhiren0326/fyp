@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -116,11 +115,6 @@ class _ReportScreenState extends State<ReportScreen>
             ];
           },
         ),
-      );
-
-      // Show print dialog
-      await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async => pdf.save(),
       );
 
       _showSnackBar('PDF report generated successfully!', Colors.green);
