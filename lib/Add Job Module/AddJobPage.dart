@@ -1,11 +1,10 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:fyp/module/ActivityLog.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import '../Notification Module/NotificationService.dart';
 import 'LocationPickerPage.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 class AddJobPage extends StatefulWidget {
   final String? jobId;
@@ -40,9 +39,7 @@ class _AddJobPageState extends State<AddJobPage> {
     'Start time*': TextEditingController(),
     'End date*': TextEditingController(),
     'End time*': TextEditingController(),
-    'Recurring Tasks': TextEditingController(),
     'Required People*': TextEditingController(),
-    'Task Notes': TextEditingController(),
   };
 
   final Set<String> visibleInputs = {};
@@ -80,9 +77,7 @@ class _AddJobPageState extends State<AddJobPage> {
     controllers['Start time*']?.text = data['startTime'] ?? '';
     controllers['End date*']?.text = data['endDate'] ?? '';
     controllers['End time*']?.text = data['endTime'] ?? '';
-    controllers['Recurring Tasks']?.text = data['recurringTasks'] ?? '';
     controllers['Required People*']?.text = data['requiredPeople']?.toString() ?? '1';
-    controllers['Task Notes']?.text = data['taskNotes'] ?? '';
 
     // Task management fields
     isShortTerm = data['isShortTerm'] ?? true;
@@ -91,8 +86,7 @@ class _AddJobPageState extends State<AddJobPage> {
     taskDependencies = List<String>.from(data['dependencies'] ?? []);
     isTimeBlocked = data['isTimeBlocked'] ?? false;
 
-    visibleInputs.addAll(
-        controllers.keys.where((key) => (controllers[key]?.text ?? '').isNotEmpty));
+    visibleInputs.addAll(controllers.keys.where((key) => (controllers[key]?.text ?? '').isNotEmpty));
   }
 
   Future<void> _loadAvailableTasks() async {
@@ -140,7 +134,6 @@ class _AddJobPageState extends State<AddJobPage> {
       return;
     }
 
-    // Validate deadlines
     if (!_validateDeadlines()) return;
 
     if (!_isFormValid()) {
@@ -148,26 +141,21 @@ class _AddJobPageState extends State<AddJobPage> {
       return;
     }
 
-    final startDateTime = _parseDateTime(
-        controllers['Start date*']?.text ?? '', controllers['Start time*']?.text ?? '');
+    final startDateTime = _parseDateTime(controllers['Start date*']?.text ?? '', controllers['Start time*']?.text ?? '');
     if (startDateTime != null && startDateTime.isBefore(DateTime.now())) {
       _showSnackBar('Start date and time cannot be in the past.');
       return;
     }
 
     if (isShortTerm) {
-      final endDateTime = _parseDateTime(
-          controllers['End date*']?.text ?? '', controllers['End time*']?.text ?? '');
-      if (startDateTime == null || endDateTime == null ||
-          startDateTime.isAfter(endDateTime)) {
-        _showSnackBar(
-            'Start date and time must be earlier than end date and time.');
+      final endDateTime = _parseDateTime(controllers['End date*']?.text ?? '', controllers['End time*']?.text ?? '');
+      if (startDateTime == null || endDateTime == null || startDateTime.isAfter(endDateTime)) {
+        _showSnackBar('Start date and time must be earlier than end date and time.');
         return;
       }
     }
 
-    final requiredPeople = int.tryParse(
-        controllers['Required People*']?.text ?? '1') ?? 1;
+    final requiredPeople = int.tryParse(controllers['Required People*']?.text ?? '1') ?? 1;
     if (requiredPeople < 1) {
       _showSnackBar('Required people must be at least 1.');
       return;
@@ -178,26 +166,24 @@ class _AddJobPageState extends State<AddJobPage> {
     try {
       DocumentReference docRef;
       if (widget.jobId != null) {
-        docRef =
-            FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
+        docRef = FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
         await docRef.update(jobData);
         _showSnackBar('Job updated successfully!');
 
-        // Update task progress tracking
-        await _updateTaskProgress(docRef.id, true);
+        if (isShortTerm) {
+          await _updateTaskProgress(docRef.id, true);
+        }
       } else {
-        docRef =
-        await FirebaseFirestore.instance.collection('jobs').add(jobData);
+        docRef = await FirebaseFirestore.instance.collection('jobs').add(jobData);
         await docRef.update({'jobId': docRef.id});
         _showSnackBar('Job posted successfully!');
 
-        // Create task progress tracking with jobCreator field
-        await _createTaskProgress(docRef.id, currentUser.uid);
-
-        // Schedule deadline reminders if it's a short-term job
         if (isShortTerm) {
-          final endDateTime = _parseDateTime(
-              controllers['End date*']?.text ?? '', controllers['End time*']?.text ?? '');
+          await _createTaskProgress(docRef.id, currentUser.uid);
+        }
+
+        if (isShortTerm) {
+          final endDateTime = _parseDateTime(controllers['End date*']?.text ?? '', controllers['End time*']?.text ?? '');
           if (endDateTime != null) {
             await NotificationService().scheduleDeadlineReminders(
               taskId: docRef.id,
@@ -208,14 +194,10 @@ class _AddJobPageState extends State<AddJobPage> {
         }
       }
 
-      // Log activity
-      await _logActivity(
-          widget.jobId != null ? 'Updated' : 'Created', docRef.id);
-
+      await _logActivity(widget.jobId != null ? 'Updated' : 'Created', docRef.id);
       Navigator.pop(context, docRef.id);
     } catch (e) {
-      _showSnackBar(
-          'Failed to ${widget.jobId != null ? 'update' : 'post'} job: $e');
+      _showSnackBar('Failed to ${widget.jobId != null ? 'update' : 'post'} job: $e');
     }
   }
 
@@ -234,7 +216,6 @@ class _AddJobPageState extends State<AddJobPage> {
       'endDate': isShortTerm ? controllers['End date*']?.text : null,
       'endTime': isShortTerm ? controllers['End time*']?.text : null,
       'recurring': isRecurring,
-      'recurringTasks': isRecurring ? controllers['Recurring Tasks']?.text : null,
       'isShortTerm': isShortTerm,
       'requiredPeople': requiredPeople,
       'applicants': [],
@@ -242,13 +223,12 @@ class _AddJobPageState extends State<AddJobPage> {
       'isCompleted': false,
       'postedAt': widget.jobId == null ? Timestamp.now() : FieldValue.serverTimestamp(),
       'postedBy': userId,
-      'jobCreator': userId, // Add this field to identify job creator
+      'jobCreator': userId,
 
       // Task Management additions
       'priority': selectedPriority,
       'dependencies': taskDependencies,
       'isTimeBlocked': isTimeBlocked,
-      'taskNotes': controllers['Task Notes']?.text ?? '',
       'progressPercentage': 0,
       'milestones': [],
       'estimatedDuration': _calculateEstimatedDuration(),
@@ -302,7 +282,6 @@ class _AddJobPageState extends State<AddJobPage> {
     if ((controllers['Start date*']?.text ?? '').isNotEmpty) {
       final startDate = DateTime.tryParse(controllers['Start date*']?.text ?? '');
       if (startDate != null) {
-        // Add reminder 1 day before start
         reminders.add({
           'type': 'start_reminder',
           'reminderDate': startDate.subtract(const Duration(days: 1)).toIso8601String(),
@@ -315,7 +294,6 @@ class _AddJobPageState extends State<AddJobPage> {
     if (isShortTerm && (controllers['End date*']?.text ?? '').isNotEmpty) {
       final endDate = DateTime.tryParse(controllers['End date*']?.text ?? '');
       if (endDate != null) {
-        // Add reminder 1 day before deadline
         reminders.add({
           'type': 'deadline_reminder',
           'reminderDate': endDate.subtract(const Duration(days: 1)).toIso8601String(),
@@ -343,8 +321,8 @@ class _AddJobPageState extends State<AddJobPage> {
         'createdAt': Timestamp.now(),
         'lastUpdated': Timestamp.now(),
         'status': 'created',
-        'jobCreator': jobCreatorId, // Store job creator ID
-        'canEditProgress': [jobCreatorId], // List of users who can edit progress
+        'jobCreator': jobCreatorId,
+        'canEditProgress': [jobCreatorId],
       });
     } catch (e) {
       print('Error creating task progress: $e');
@@ -432,23 +410,17 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
-        ],
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Task Priority', style: GoogleFonts.poppins(
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-              color: const Color(0xFF006D77))),
+          Text('Task Priority', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77))),
           const SizedBox(height: 8),
           Row(
             children: priorityLevels.map((priority) {
               final isSelected = selectedPriority == priority;
               Color priorityColor = _getPriorityColor(priority);
-
               return Expanded(
                 child: GestureDetector(
                   onTap: () => setState(() => selectedPriority = priority),
@@ -481,16 +453,11 @@ class _AddJobPageState extends State<AddJobPage> {
 
   Color _getPriorityColor(String priority) {
     switch (priority) {
-      case 'Low':
-        return Colors.green;
-      case 'Medium':
-        return Colors.orange;
-      case 'High':
-        return Colors.red;
-      case 'Critical':
-        return Colors.purple;
-      default:
-        return Colors.grey;
+      case 'Low': return Colors.green;
+      case 'Medium': return Colors.orange;
+      case 'High': return Colors.red;
+      case 'Critical': return Colors.purple;
+      default: return Colors.grey;
     }
   }
 
@@ -501,9 +468,7 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
-        ],
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -511,10 +476,7 @@ class _AddJobPageState extends State<AddJobPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Task Dependencies', style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: const Color(0xFF006D77))),
+              Text('Task Dependencies', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77))),
               IconButton(
                 icon: const Icon(Icons.add, color: Color(0xFF006D77)),
                 onPressed: _showDependencySelector,
@@ -587,29 +549,21 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
-        ],
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
-              fontSize: 14,
-              color: const Color(0xFF006D77))),
+          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77))),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
             value: controller.text.isNotEmpty ? controller.text : null,
-            items: options.map((e) => DropdownMenuItem(value: e,
-                child: Text(e, style: GoogleFonts.poppins(
-                    color: const Color(0xFF006D77))))).toList(),
+            items: options.map((e) => DropdownMenuItem(value: e, child: Text(e, style: GoogleFonts.poppins(color: const Color(0xFF006D77))))).toList(),
             onChanged: (val) => setState(() => controller.text = val ?? ''),
             decoration: InputDecoration(
               filled: true,
               fillColor: const Color(0xFFF9F9F9),
-              border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             ),
             dropdownColor: Colors.white,
@@ -630,16 +584,12 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
-        ],
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
-              fontSize: 14,
-              color: const Color(0xFF006D77))),
+          Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77))),
           const SizedBox(height: 8),
           TextField(
             controller: controller,
@@ -665,9 +615,7 @@ class _AddJobPageState extends State<AddJobPage> {
               hintText: 'Pick $label',
               filled: true,
               fillColor: const Color(0xFFF9F9F9),
-              border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               suffixIcon: const Icon(Icons.calendar_today, color: Color(0xFF006D77)),
             ),
@@ -692,9 +640,7 @@ class _AddJobPageState extends State<AddJobPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
-        ],
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -702,12 +648,7 @@ class _AddJobPageState extends State<AddJobPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                label,
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                    color: const Color(0xFF006D77)),
-              ),
+              Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: const Color(0xFF006D77))),
               IconButton(
                 icon: Icon(hasText ? Icons.edit : Icons.add, color: const Color(0xFF006D77)),
                 onPressed: () async {
@@ -733,22 +674,15 @@ class _AddJobPageState extends State<AddJobPage> {
             const SizedBox(height: 8),
             TextField(
               controller: controller,
-              keyboardType: isSalaryField || isRequiredPeopleField
-                  ? TextInputType.number
-                  : TextInputType.text,
-              inputFormatters: isSalaryField || isRequiredPeopleField ? [
-                FilteringTextInputFormatter.digitsOnly
-              ] : null,
-              maxLines: label == 'Description' || label == 'Recurring Tasks' ||
-                  label == 'Task Notes' ? 4 : 1,
+              keyboardType: isSalaryField || isRequiredPeopleField ? TextInputType.number : TextInputType.text,
+              inputFormatters: _getInputFormatters(label),
+              maxLines: label == 'Description' ? 4 : 1,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: 'Enter $label',
                 filled: true,
                 fillColor: const Color(0xFFF9F9F9),
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide.none),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               ),
             ),
@@ -756,6 +690,26 @@ class _AddJobPageState extends State<AddJobPage> {
         ],
       ),
     );
+  }
+
+  List<TextInputFormatter>? _getInputFormatters(String label) {
+    final isSalaryField = label == 'Salary (RM)*';
+    final isRequiredPeopleField = label == 'Required People*';
+
+    if (isSalaryField || isRequiredPeopleField) {
+      return [FilteringTextInputFormatter.digitsOnly];
+    }
+
+    switch (label) {
+      case 'Required Skill*':
+        return [FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9\s,.-]+'))];
+      case 'Job position*':
+      case 'Employer/Company Name*':
+      case 'Description':
+        return null;
+      default:
+        return null;
+    }
   }
 
   bool _isFormValid() {
@@ -772,24 +726,19 @@ class _AddJobPageState extends State<AddJobPage> {
     return true;
   }
 
-  Widget _buildSwitchRow(
-      {required String label, required bool value, required Function(bool) onChanged}) {
+  Widget _buildSwitchRow({required String label, required bool value, required Function(bool) onChanged}) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))
-        ],
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: GoogleFonts.poppins(fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF006D77))),
+          Text(label, style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600, color: const Color(0xFF006D77))),
           Switch(value: value, onChanged: onChanged, activeColor: const Color(0xFF006D77)),
         ],
       ),
@@ -817,18 +766,14 @@ class _AddJobPageState extends State<AddJobPage> {
           ),
           title: Text(
             widget.jobId == null ? 'Add a Job' : 'Edit Job',
-            style: GoogleFonts.poppins(fontSize: 24,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF006D77)),
+            style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w600, color: const Color(0xFF006D77)),
           ),
           actions: [
             TextButton(
               onPressed: _submitJob,
               child: Text(
                 widget.jobId == null ? 'Post' : 'Save',
-                style: GoogleFonts.poppins(color: const Color(0xFF006D77),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16),
+                style: GoogleFonts.poppins(color: const Color(0xFF006D77), fontWeight: FontWeight.bold, fontSize: 16),
               ),
             ),
           ],
@@ -840,9 +785,7 @@ class _AddJobPageState extends State<AddJobPage> {
             children: [
               Text(
                 widget.jobId == null ? 'Add a new job' : 'Edit your job',
-                style: GoogleFonts.poppins(fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF006D77)),
+                style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.w600, color: const Color(0xFF006D77)),
               ),
               const SizedBox(height: 16),
               Expanded(
@@ -862,11 +805,6 @@ class _AddJobPageState extends State<AddJobPage> {
                       onChanged: (val) => setState(() => isShortTerm = val),
                     ),
                     _buildSwitchRow(
-                      label: 'Recurring Task',
-                      value: isRecurring,
-                      onChanged: (val) => setState(() => isRecurring = val),
-                    ),
-                    _buildSwitchRow(
                       label: 'Time Blocking',
                       value: isTimeBlocked,
                       onChanged: (val) => setState(() => isTimeBlocked = val),
@@ -877,8 +815,6 @@ class _AddJobPageState extends State<AddJobPage> {
                     if (isShortTerm) _buildDateTimePicker('Start time*', false),
                     if (isShortTerm) _buildDateTimePicker('End date*', true),
                     if (isShortTerm) _buildDateTimePicker('End time*', false),
-                    if (isRecurring) _buildFieldTile('Recurring Tasks'),
-                    _buildFieldTile('Task Notes'),
                     _buildFieldTile('Required People*'),
                   ],
                 ),

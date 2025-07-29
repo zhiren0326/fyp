@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import '../Add Job Module/RecurringTasksManager.dart';
 import '../Add Job Module/TaskDependenciesManager.dart';
-import '../Add Job Module/TaskProgressTracker.dart';
+import '../Task Progress/TaskProgressTracker.dart';
 import '../Add%20Job%20Module/JobDetailPage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
@@ -26,16 +26,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   String _userSkills = '';
   List<String> _relatedSkills = [];
   bool isLoading = true;
-
-  // Dashboard stats
-  Map<String, dynamic> dashboardStats = {
-    'totalTasks': 0,
-    'completedTasks': 0,
-    'inProgressTasks': 0,
-    'overdueTasks': 0,
-    'highPriorityTasks': 0,
-    'recurringTasks': 0,
-  };
 
   @override
   void initState() {
@@ -60,7 +50,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     try {
       await Future.wait([
         _fetchUserSkills(),
-        _loadTaskStats(),
       ]);
     } catch (e) {
       print('Error loading initial data: $e');
@@ -188,216 +177,8 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     }
   }
 
-  Future<void> _loadTaskStats() async {
-    try {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
-
-      final jobsSnapshot = await FirebaseFirestore.instance
-          .collection('jobs')
-          .where('postedBy', isEqualTo: currentUser.uid)
-          .get();
-
-      final appliedJobsSnapshot = await FirebaseFirestore.instance
-          .collection('jobs')
-          .where('applicants', arrayContains: currentUser.uid)
-          .get();
-
-      final tasksSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .collection('tasks')
-          .get();
-
-      final recurringTasksSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .collection('recurringTasks')
-          .get();
-
-      int totalTasks = 0;
-      int completedTasks = 0;
-      int inProgressTasks = 0;
-      int overdueTasks = 0;
-      int highPriorityTasks = 0;
-
-      for (var doc in jobsSnapshot.docs) {
-        final data = doc.data();
-        totalTasks++;
-        if (data['isCompleted'] == true) {
-          completedTasks++;
-        } else {
-          inProgressTasks++;
-        }
-        if (data['priority'] == 'High' || data['priority'] == 'Critical') {
-          highPriorityTasks++;
-        }
-        if (data['endDate'] != null) {
-          final endDate = DateTime.tryParse(data['endDate']);
-          if (endDate != null && endDate.isBefore(DateTime.now()) && data['isCompleted'] != true) {
-            overdueTasks++;
-          }
-        }
-      }
-
-      for (var doc in appliedJobsSnapshot.docs) {
-        final data = doc.data();
-        final isAccepted = (data['acceptedApplicants'] as List?)?.contains(currentUser.uid) ?? false;
-        if (isAccepted) {
-          totalTasks++;
-          if (data['isCompleted'] == true) {
-            completedTasks++;
-          } else {
-            inProgressTasks++;
-          }
-          if (data['priority'] == 'High' || data['priority'] == 'Critical') {
-            highPriorityTasks++;
-          }
-          if (data['endDate'] != null) {
-            final endDate = DateTime.tryParse(data['endDate']);
-            if (endDate != null && endDate.isBefore(DateTime.now()) && data['isCompleted'] != true) {
-              overdueTasks++;
-            }
-          }
-        }
-      }
-
-      for (var doc in tasksSnapshot.docs) {
-        final data = doc.data();
-        if (data['tasks'] != null) {
-          for (var task in data['tasks']) {
-            totalTasks++;
-            if (task['completed'] == true) {
-              completedTasks++;
-            } else {
-              inProgressTasks++;
-            }
-            if (task['priority'] == 'High' || task['priority'] == 'Critical') {
-              highPriorityTasks++;
-            }
-          }
-        }
-      }
-
-      setState(() {
-        dashboardStats = {
-          'totalTasks': totalTasks,
-          'completedTasks': completedTasks,
-          'inProgressTasks': inProgressTasks,
-          'overdueTasks': overdueTasks,
-          'highPriorityTasks': highPriorityTasks,
-          'recurringTasks': recurringTasksSnapshot.docs.length,
-        };
-      });
-    } catch (e) {
-      print('Error loading task stats: $e');
-      throw e; // Propagate error to be caught in _loadInitialData
-    }
-  }
-
   void _editJob(String jobId, Map<String, dynamic> data) {
     Navigator.push(context, MaterialPageRoute(builder: (context) => AddJobPage(jobId: jobId, initialData: data)));
-  }
-
-  Widget _buildStatsGrid() {
-    final stats = [
-      {
-        'title': 'Total Tasks',
-        'value': '${dashboardStats['totalTasks']}',
-        'color': Colors.blue,
-        'icon': Icons.assignment,
-      },
-      {
-        'title': 'Completed',
-        'value': '${dashboardStats['completedTasks']}',
-        'color': Colors.green,
-        'icon': Icons.check_circle,
-      },
-      {
-        'title': 'In Progress',
-        'value': '${dashboardStats['inProgressTasks']}',
-        'color': Colors.orange,
-        'icon': Icons.pending,
-      },
-      {
-        'title': 'Overdue',
-        'value': '${dashboardStats['overdueTasks']}',
-        'color': Colors.red,
-        'icon': Icons.warning,
-      },
-      {
-        'title': 'High Priority',
-        'value': '${dashboardStats['highPriorityTasks']}',
-        'color': Colors.purple,
-        'icon': Icons.priority_high,
-      },
-      {
-        'title': 'Recurring',
-        'value': '${dashboardStats['recurringTasks']}',
-        'color': Colors.teal,
-        'icon': Icons.repeat,
-      },
-    ];
-
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        childAspectRatio: 1.5,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-      ),
-      itemCount: stats.length,
-      itemBuilder: (context, index) {
-        final stat = stats[index];
-        return Card(
-          elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  (stat['color'] as Color).withOpacity(0.1),
-                  Colors.white,
-                ],
-              ),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  stat['icon'] as IconData,
-                  size: 32,
-                  color: stat['color'] as Color,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  stat['value'] as String,
-                  style: GoogleFonts.poppins(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: stat['color'] as Color,
-                  ),
-                ),
-                Text(
-                  stat['title'] as String,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Widget _buildQuickActionsSection() {
@@ -613,11 +394,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
               const SizedBox(height: 12),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _buildStatsGrid(),
-              ),
-              const SizedBox(height: 24),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: _buildQuickActionsSection(),
               ),
               const SizedBox(height: 24),
@@ -779,7 +555,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                   style: GoogleFonts.poppins(color: Colors.black87),
                 ),
               ),
-             
               const SizedBox(height: 12),
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
