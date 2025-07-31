@@ -163,6 +163,7 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
         initialEndTime: slot.endTime,
         availableTasks: _unscheduledTasks,
         colors: _blockColors,
+        selectedDate: widget.selectedDate, // Add this parameter
         onSave: (timeBlock) {
           setState(() {
             _timeBlocks.add(timeBlock);
@@ -188,6 +189,7 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
         availableTasks: [..._unscheduledTasks, ...widget.tasks.where((task) =>
             block.taskIds.contains(task.id))],
         colors: _blockColors,
+        selectedDate: widget.selectedDate, // Add this parameter
         onSave: (updatedBlock) {
           setState(() {
             final index = _timeBlocks.indexOf(block);
@@ -245,6 +247,37 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
     );
   }
 
+  // Handle task drop on time slot
+  void _onTaskDropped(Task task, TimeSlot slot) {
+    if (_isSlotOccupied(slot)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Time slot is already occupied')),
+      );
+      return;
+    }
+
+    final timeBlock = TimeBlock(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: task.title,
+      date: widget.selectedDate,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      color: _blockColors[_timeBlocks.length % _blockColors.length],
+      taskIds: [task.id],
+    );
+
+    setState(() {
+      _timeBlocks.add(timeBlock);
+      _unscheduledTasks.remove(task);
+    });
+
+    _saveTimeBlocks();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${task.title} scheduled successfully')),
+    );
+  }
+
   Widget _buildTimeSlotGrid() {
     final timeSlots = _generateTimeSlots();
 
@@ -283,52 +316,72 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
                   ),
                 ),
               ),
-              // Time block or empty slot
+              // Time block or empty slot with drag target
               Expanded(
-                child: GestureDetector(
-                  onTap: isOccupied ? () => _editTimeBlock(timeBlock) : () => _createTimeBlock(slot),
-                  onLongPress: isOccupied ? () => _deleteTimeBlock(timeBlock) : null,
-                  child: Container(
-                    height: 50,
-                    decoration: BoxDecoration(
-                      color: isOccupied ? timeBlock.color.withOpacity(0.3) : Colors.grey[100],
-                      border: Border.all(
-                        color: isOccupied ? timeBlock.color : Colors.grey[300]!,
-                        width: isOccupied ? 2 : 1,
-                      ),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Center(
-                      child: isOccupied
-                          ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            timeBlock.title,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: timeBlock.color,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                child: DragTarget<Task>(
+                  onAccept: (task) => _onTaskDropped(task, slot),
+                  builder: (context, candidateData, rejectedData) {
+                    final isDraggedOver = candidateData.isNotEmpty;
+                    return GestureDetector(
+                      onTap: isOccupied ? () => _editTimeBlock(timeBlock) : () => _createTimeBlock(slot),
+                      onLongPress: isOccupied ? () => _deleteTimeBlock(timeBlock) : null,
+                      child: Container(
+                        height: 50,
+                        decoration: BoxDecoration(
+                          color: isDraggedOver
+                              ? Colors.green.withOpacity(0.3)
+                              : isOccupied
+                              ? timeBlock.color.withOpacity(0.3)
+                              : Colors.grey[100],
+                          border: Border.all(
+                            color: isDraggedOver
+                                ? Colors.green
+                                : isOccupied
+                                ? timeBlock.color
+                                : Colors.grey[300]!,
+                            width: isDraggedOver || isOccupied ? 2 : 1,
                           ),
-                          if (timeBlock.taskIds.isNotEmpty)
-                            Text(
-                              '${timeBlock.taskIds.length} task${timeBlock.taskIds.length > 1 ? 's' : ''}',
-                              style: GoogleFonts.poppins(
-                                fontSize: 10,
-                                color: timeBlock.color.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: isOccupied
+                              ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                timeBlock.title,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: timeBlock.color,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                        ],
-                      )
-                          : Icon(
-                        Icons.add,
-                        color: Colors.grey[400],
-                        size: 20,
+                              if (timeBlock.taskIds.isNotEmpty)
+                                Text(
+                                  '${timeBlock.taskIds.length} task${timeBlock.taskIds.length > 1 ? 's' : ''}',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 10,
+                                    color: timeBlock.color.withOpacity(0.7),
+                                  ),
+                                ),
+                            ],
+                          )
+                              : isDraggedOver
+                              ? Icon(
+                            Icons.schedule,
+                            color: Colors.green,
+                            size: 20,
+                          )
+                              : Icon(
+                            Icons.add,
+                            color: Colors.grey[400],
+                            size: 20,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -370,31 +423,117 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
                     color: Colors.orange[700],
                   ),
                 ),
+                const Spacer(),
+                Text(
+                  'Drag to schedule',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.orange[600],
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
               ],
             ),
           ),
-          ListView.builder(
+          ReorderableListView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: _unscheduledTasks.length,
+            onReorder: (oldIndex, newIndex) {
+              setState(() {
+                if (newIndex > oldIndex) {
+                  newIndex -= 1;
+                }
+                final Task item = _unscheduledTasks.removeAt(oldIndex);
+                _unscheduledTasks.insert(newIndex, item);
+              });
+            },
             itemBuilder: (context, index) {
               final task = _unscheduledTasks[index];
-              return ListTile(
-                leading: Icon(
-                  Icons.drag_indicator,
-                  color: Colors.grey[400],
+              return Draggable<Task>(
+                key: Key(task.id),
+                data: task,
+                feedback: Material(
+                  elevation: 4,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 300,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue, width: 2),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.schedule, color: Colors.blue[700]),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                task.title,
+                                style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.blue[700],
+                                ),
+                              ),
+                              Text(
+                                '${task.category} • ${task.estimatedDuration} min',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.blue[600],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                title: Text(
-                  task.title,
-                  style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                childWhenDragging: Opacity(
+                  opacity: 0.5,
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.drag_indicator,
+                      color: Colors.grey[400],
+                    ),
+                    title: Text(
+                      task.title,
+                      style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                    ),
+                    subtitle: Text(
+                      '${task.category} • ${task.estimatedDuration} min',
+                      style: GoogleFonts.poppins(fontSize: 12),
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.schedule),
+                      onPressed: () => _quickScheduleTask(task),
+                    ),
+                  ),
                 ),
-                subtitle: Text(
-                  '${task.category} • ${task.estimatedDuration} min',
-                  style: GoogleFonts.poppins(fontSize: 12),
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.schedule),
-                  onPressed: () => _quickScheduleTask(task),
+                child: ListTile(
+                  key: Key(task.id),
+                  leading: Icon(
+                    Icons.drag_indicator,
+                    color: Colors.grey[600],
+                  ),
+                  title: Text(
+                    task.title,
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: Text(
+                    '${task.category} • ${task.estimatedDuration} min',
+                    style: GoogleFonts.poppins(fontSize: 12),
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.schedule),
+                    onPressed: () => _quickScheduleTask(task),
+                  ),
                 ),
               );
             },
@@ -508,7 +647,8 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
                       '• Tap empty slots to create time blocks\n'
                           '• Tap existing blocks to edit them\n'
                           '• Long press blocks to delete them\n'
-                          '• Assign tasks to blocks for better organization\n'
+                          '• Drag tasks from the list to time slots\n'
+                          '• Reorder tasks by dragging within the list\n'
                           '• Use different colors for different activities',
                     ),
                     actions: [
@@ -545,6 +685,7 @@ class _TimeBlockDialog extends StatefulWidget {
   final List<String> initialTaskIds;
   final List<Task> availableTasks;
   final List<Color> colors;
+  final DateTime selectedDate; // Add this parameter
   final Function(TimeBlock) onSave;
 
   const _TimeBlockDialog({
@@ -555,6 +696,7 @@ class _TimeBlockDialog extends StatefulWidget {
     this.initialTaskIds = const [],
     required this.availableTasks,
     required this.colors,
+    required this.selectedDate, // Add this parameter
     required this.onSave,
   });
 
@@ -702,7 +844,7 @@ class _TimeBlockDialogState extends State<_TimeBlockDialog> {
               final timeBlock = TimeBlock(
                 id: DateTime.now().millisecondsSinceEpoch.toString(),
                 title: _titleController.text.trim(),
-                date: DateTime.now(), // This should be the selected date
+                date: widget.selectedDate, // Use the passed selectedDate
                 startTime: _startTime,
                 endTime: _endTime,
                 color: _selectedColor,

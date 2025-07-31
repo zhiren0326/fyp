@@ -5,7 +5,7 @@ import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import 'package:fyp/Add%20Job%20Module/ManageApplicantPage.dart';
 import 'package:fyp/Task%20Progress/ProgressTracker.dart';
 import 'package:fyp/Task%20Progress/TaskProgressPage.dart';
-import '../Add Job Module/RecurringTasksManager.dart';
+import '../Add Job Module/RecurringTaskScheduler.dart';
 import '../Add Job Module/TaskDependenciesManager.dart';
 import '../Add%20Job%20Module/JobDetailPage.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -52,6 +52,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     try {
       await Future.wait([
         _fetchUserSkills(),
+        _processRecurringTasks(), // Process any pending recurring tasks
       ]);
     } catch (e) {
       print('Error loading initial data: $e');
@@ -61,6 +62,137 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     } finally {
       setState(() => isLoading = false);
     }
+  }
+
+  Future<void> _processRecurringTasks() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final now = DateTime.now();
+
+      // Get all active recurring tasks
+      final recurringTasksSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('recurringTasks')
+          .where('isActive', isEqualTo: true)
+          .get();
+
+      for (var doc in recurringTasksSnapshot.docs) {
+        final data = doc.data();
+        final nextOccurrence = DateTime.tryParse(data['nextOccurrence'] ?? '');
+
+        if (nextOccurrence != null && now.isAfter(nextOccurrence)) {
+          await _generateRecurringTaskInstance(doc.id, data);
+        }
+      }
+    } catch (e) {
+      print('Error processing recurring tasks: $e');
+    }
+  }
+
+  Future<void> _generateRecurringTaskInstance(String recurringTaskId, Map<String, dynamic> recurringData) async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final originalJobData = recurringData['originalJobData'] as Map<String, dynamic>?;
+      if (originalJobData == null) return;
+
+      final now = DateTime.now();
+      final frequency = recurringData['frequency'] ?? 'daily';
+
+      // Calculate new dates
+      final newStartDate = now.toIso8601String().split('T')[0];
+      final originalEndDate = DateTime.tryParse(originalJobData['endDate'] ?? '');
+      final daysDifference = originalEndDate != null
+          ? originalEndDate.difference(DateTime.parse(originalJobData['startDate'])).inDays
+          : 1;
+      final newEndDate = now.add(Duration(days: daysDifference)).toIso8601String().split('T')[0];
+
+      // Create new job instance
+      final newJobData = Map<String, dynamic>.from(originalJobData);
+      newJobData.update('startDate', (value) => newStartDate);
+      newJobData.update('endDate', (value) => newEndDate);
+      newJobData['postedAt'] = Timestamp.now();
+      newJobData['isCompleted'] = false;
+      newJobData['applicants'] = [];
+      newJobData['acceptedApplicants'] = [];
+      newJobData['progressPercentage'] = 0;
+      newJobData['isRecurringInstance'] = true;
+      newJobData['parentRecurringId'] = recurringTaskId;
+      newJobData['recurring'] = false;
+
+      // Add to jobs collection
+      final docRef = await FirebaseFirestore.instance.collection('jobs').add(newJobData);
+      await docRef.update({'jobId': docRef.id});
+
+      // Create task progress
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(docRef.id)
+          .set({
+        'taskId': docRef.id,
+        'taskTitle': newJobData['jobPosition'] ?? 'Task',
+        'currentProgress': 0,
+        'milestones': [],
+        'createdAt': Timestamp.now(),
+        'lastUpdated': Timestamp.now(),
+        'status': 'generated',
+        'jobCreator': currentUser.uid,
+        'canEditProgress': [currentUser.uid],
+        'isRecurringInstance': true,
+      });
+
+      // Update next occurrence
+      final nextOccurrence = _calculateNextOccurrence(now, frequency, recurringData['time'] ?? '09:00');
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('recurringTasks')
+          .doc(recurringTaskId)
+          .update({
+        'nextOccurrence': nextOccurrence.toIso8601String(),
+        'lastGenerated': Timestamp.now(),
+      });
+
+      print('Generated recurring task instance: ${newJobData['jobPosition']}');
+    } catch (e) {
+      print('Error generating recurring task instance: $e');
+    }
+  }
+
+  DateTime _calculateNextOccurrence(DateTime from, String frequency, String time) {
+    final timeParts = time.split(':');
+    final hour = int.tryParse(timeParts[0]) ?? 9;
+    final minute = int.tryParse(timeParts[1]) ?? 0;
+
+    DateTime next = from;
+
+    switch (frequency.toLowerCase()) {
+      case 'hourly':
+        next = next.add(const Duration(hours: 1));
+        break;
+      case 'daily':
+        next = DateTime(next.year, next.month, next.day + 1, hour, minute);
+        break;
+      case 'weekly':
+        next = DateTime(next.year, next.month, next.day + 7, hour, minute);
+        break;
+      case 'monthly':
+        next = DateTime(next.year, next.month + 1, next.day, hour, minute);
+        break;
+      case 'yearly':
+        next = DateTime(next.year + 1, next.month, next.day, hour, minute);
+        break;
+      default:
+        next = DateTime(next.year, next.month, next.day + 1, hour, minute);
+    }
+
+    return next;
   }
 
   Future<void> _fetchUserSkills() async {
@@ -89,7 +221,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
       }
     } catch (e) {
       print('Error fetching skills: $e');
-      throw e; // Propagate error to be caught in _loadInitialData
+      throw e;
     }
   }
 
@@ -180,7 +312,102 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   }
 
   void _editJob(String jobId, Map<String, dynamic> data) {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => AddJobPage(jobId: jobId, initialData: data)));
+    Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (context) => AddJobPage(jobId: jobId, initialData: data)
+        )
+    ).then((_) => _loadInitialData()); // Refresh data after edit
+  }
+
+  void _deleteJob(String jobId, String jobTitle) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          'Delete Task',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          'Are you sure you want to delete "$jobTitle"? This action cannot be undone.',
+          style: GoogleFonts.poppins(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _performDeleteJob(jobId, jobTitle);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _performDeleteJob(String jobId, String jobTitle) async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      // Delete the job document
+      await FirebaseFirestore.instance
+          .collection('jobs')
+          .doc(jobId)
+          .delete();
+
+      // Delete associated task progress
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(jobId)
+          .delete();
+
+      // Delete recurring task if exists
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('recurringTasks')
+          .doc(jobId)
+          .delete();
+
+      // Log the deletion activity
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('activityLog')
+          .add({
+        'action': 'Deleted',
+        'taskId': jobId,
+        'taskTitle': jobTitle,
+        'timestamp': Timestamp.now(),
+        'details': {
+          'reason': 'Manual deletion by user',
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Task "$jobTitle" deleted successfully!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      // Refresh the data
+      _loadInitialData();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to delete task: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildQuickActionsSection() {
@@ -194,7 +421,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
           MaterialPageRoute(
             builder: (context) => const ManageApplicantsPage(
               jobId: '',
-              jobPosition: 'All Tasks', // Generic title for task management
+              jobPosition: 'All Tasks',
             ),
           ),
         ),
@@ -214,7 +441,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         'color': Colors.purple,
         'onTap': () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const RecurringTasksManager()),
+          MaterialPageRoute(builder: (context) => const RecurringTaskScheduler()),
         ),
       },
       {
@@ -658,42 +885,132 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                       final salary = data['salary'] ?? 'Not specified';
                       final applicants = data['applicants'] as List? ?? [];
                       final requiredPeople = data['requiredPeople'] ?? 1;
+                      final isOwner = data['postedBy'] == currentUser.uid;
+                      final isRecurringInstance = data['isRecurringInstance'] ?? false;
 
                       return Card(
                         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         elevation: 3,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.all(12),
-                          title: Text(
-                            jobPosition,
-                            style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Task Type: $taskType', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
-                              Text('Start Date: $startDate', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
-                              if (startTime.isNotEmpty) Text('Start Time: $startTime', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
-                              Text('Salary: RM $salary', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
-                              if (data['requiredSkill'] != null)
-                                Text(
-                                  'Skill Required: ${data['requiredSkill'] is String ? (data['requiredSkill'] as String).split(',').join(', ') : (data['requiredSkill'] as List).join(', ')}',
-                                  style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
+                        child: Column(
+                          children: [
+                            ListTile(
+                              contentPadding: const EdgeInsets.all(12),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      jobPosition,
+                                      style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87),
+                                    ),
+                                  ),
+                                  if (isRecurringInstance)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.purple.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.purple),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.repeat, size: 12, color: Colors.purple),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'Recurring',
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 10,
+                                              color: Colors.purple,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Task Type: $taskType', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                                  Text('Start Date: $startDate', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                                  if (startTime.isNotEmpty) Text('Start Time: $startTime', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                                  Text('Salary: RM $salary', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                                  if (data['requiredSkill'] != null)
+                                    Text(
+                                      'Skill Required: ${data['requiredSkill'] is String ? (data['requiredSkill'] as String).split(',').join(', ') : (data['requiredSkill'] as List).join(', ')}',
+                                      style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800]),
+                                    ),
+                                  Text('Applicants: ${applicants.length}/$requiredPeople', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
+                                ],
+                              ),
+                              trailing: applicants.contains(currentUser.uid)
+                                  ? const Icon(Icons.check_circle, color: Colors.teal)
+                                  : null,
+                              onTap: () {
+                                print('Navigating to JobDetailPage with jobId: ${job.id}');
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => JobDetailPage(data: data, jobId: job.id)),
+                                ).then((value) => print('Returned from JobDetailPage')).catchError((error) => print('Navigation error: $error'));
+                              },
+                            ),
+                            // Edit and Delete buttons for owner's tasks
+                            if (isOwner)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[50],
+                                  borderRadius: const BorderRadius.only(
+                                    bottomLeft: Radius.circular(12),
+                                    bottomRight: Radius.circular(12),
+                                  ),
                                 ),
-                              Text('Applicants: ${applicants.length}/$requiredPeople', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[800])),
-                            ],
-                          ),
-                          trailing: applicants.contains(currentUser.uid)
-                              ? const Icon(Icons.check_circle, color: Colors.teal)
-                              : null,
-                          onTap: () {
-                            print('Navigating to JobDetailPage with jobId: ${job.id}');
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (context) => JobDetailPage(data: data, jobId: job.id)),
-                            ).then((value) => print('Returned from JobDetailPage')).catchError((error) => print('Navigation error: $error'));
-                          },
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                  children: [
+                                    Expanded(
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _editJob(job.id, data),
+                                        icon: const Icon(Icons.edit, size: 16),
+                                        label: Text(
+                                          'Edit',
+                                          style: GoogleFonts.poppins(fontSize: 12),
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blue,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(vertical: 8),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _deleteJob(job.id, jobPosition),
+                                        icon: const Icon(Icons.delete, size: 16),
+                                        label: Text(
+                                          'Delete',
+                                          style: GoogleFonts.poppins(fontSize: 12),
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.red,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(vertical: 8),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
                         ),
                       );
                     }).toList(),
@@ -707,7 +1024,10 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
         floatingActionButton: Padding(
           padding: const EdgeInsets.only(bottom: 16),
           child: FloatingActionButton(
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AddJobPage())),
+            onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const AddJobPage())
+            ).then((_) => _loadInitialData()), // Refresh after creating new task
             backgroundColor: Colors.teal,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: const Icon(Icons.add, size: 30),
