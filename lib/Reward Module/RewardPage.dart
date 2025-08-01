@@ -641,6 +641,134 @@ class _RewardsPageState extends State<RewardsPage> {
     );
   }
 
+  // Replace your reward item builder in the GridView with this fixed version:
+
+  Widget _buildRewardItem(Map<String, dynamic> item, bool canAfford) {
+    return GestureDetector(
+      onTap: _isRedeeming || !canAfford ? null : () => _redeemItem(item),
+      child: Container(
+        decoration: BoxDecoration(
+          color: canAfford ? Colors.white : Colors.grey[100],
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min, // Add this
+          children: [
+            // Icon and points section
+            Expanded(
+              flex: 3,
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: item['color'].withOpacity(0.1),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(12),
+                    topRight: Radius.circular(12),
+                  ),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min, // Add this
+                  children: [
+                    Icon(
+                      item['icon'],
+                      size: 36, // Reduced from 40
+                      color: canAfford ? item['color'] : Colors.grey,
+                    ),
+                    const SizedBox(height: 6), // Reduced from 8
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.stars,
+                          size: 14, // Reduced from 16
+                          color: canAfford ? Colors.amber : Colors.grey,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${item['points']} pts', // Shortened text
+                          style: GoogleFonts.poppins(
+                            fontSize: 11, // Reduced from 12
+                            fontWeight: FontWeight.w600,
+                            color: canAfford ? item['color'] : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Title and button section
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.all(8), // Reduced from 12
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min, // Add this
+                  children: [
+                    // Title
+                    Flexible( // Wrap with Flexible
+                      child: Text(
+                        item['name'],
+                        style: GoogleFonts.poppins(
+                          fontSize: 13, // Reduced from 14
+                          fontWeight: FontWeight.bold,
+                          color: canAfford ? Colors.black : Colors.grey,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Spacer(),
+                    // Button/Loading indicator
+                    if (_isRedeeming)
+                      const Center(
+                        child: SizedBox(
+                          height: 18, // Reduced from 20
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 6), // Reduced from 8
+                        decoration: BoxDecoration(
+                          color: canAfford ? item['color'] : Colors.grey[300],
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          canAfford ? 'Redeem' : 'Need ${item['points'] - _userPoints}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10, // Reduced from 11
+                            fontWeight: FontWeight.w600,
+                            color: canAfford ? Colors.white : Colors.grey[600],
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+// Updated GridView builder method
   Widget _buildRedeemRewards() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
@@ -681,7 +809,7 @@ class _RewardsPageState extends State<RewardsPage> {
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              childAspectRatio: 0.85,
+              childAspectRatio: 0.9, // Increased from 0.85 to give more height
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
             ),
@@ -689,118 +817,7 @@ class _RewardsPageState extends State<RewardsPage> {
             itemBuilder: (context, index) {
               final item = _redeemableItems[index];
               final canAfford = _userPoints >= item['points'];
-
-              return GestureDetector(
-                onTap: _isRedeeming || !canAfford ? null : () => _redeemItem(item),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: canAfford ? Colors.white : Colors.grey[100],
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.grey.withOpacity(0.1),
-                        blurRadius: 6,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: Container(
-                          width: double.infinity,
-                          decoration: BoxDecoration(
-                            color: item['color'].withOpacity(0.1),
-                            borderRadius: const BorderRadius.only(
-                              topLeft: Radius.circular(12),
-                              topRight: Radius.circular(12),
-                            ),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                item['icon'],
-                                size: 40,
-                                color: canAfford ? item['color'] : Colors.grey,
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.stars,
-                                    size: 16,
-                                    color: canAfford ? Colors.amber : Colors.grey,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '${item['points']} points',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: canAfford ? item['color'] : Colors.grey,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                item['name'],
-                                style: GoogleFonts.poppins(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: canAfford ? Colors.black : Colors.grey,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const Spacer(),
-                              if (_isRedeeming)
-                                const Center(
-                                  child: SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  ),
-                                )
-                              else
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: canAfford ? item['color'] : Colors.grey[300],
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    canAfford ? 'Redeem' : 'Need ${item['points'] - _userPoints} pts',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: canAfford ? Colors.white : Colors.grey[600],
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
+              return _buildRewardItem(item, canAfford);
             },
           ),
         ],

@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
-import 'package:fyp/Add%20Job%20Module/ManageApplicantPage.dart';
-import 'package:fyp/Task%20Progress/ProgressTracker.dart';
 import 'package:fyp/Task%20Progress/TaskProgressPage.dart';
 import '../Add Job Module/RecurringTaskScheduler.dart';
 import '../Add Job Module/TaskDependenciesManager.dart';
@@ -413,16 +411,13 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   Widget _buildQuickActionsSection() {
     final actions = [
       {
-        'title': 'Manage Tasks',
+        'title': 'Tasks Progress',
         'icon': Icons.task,
         'color': Colors.blue,
         'onTap': () => Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => const ManageApplicantsPage(
-              jobId: '',
-              jobPosition: 'All Tasks',
-            ),
+            builder: (context) => TaskProgressPage(),
           ),
         ),
       },

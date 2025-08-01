@@ -3,15 +3,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import 'AddJobPage.dart';
-
-enum TaskDependencyLogic {
-  strictAnd,      // All dependencies must be completed (current)
-  flexibleAnd,    // All dependencies must be started (at least 1% progress)
-  partialOr,      // At least 50% of dependencies must be completed
-  anyOr,          // At least one dependency must be completed
-  weighted,       // Dependencies have weights, need certain threshold
-  conditional,    // Dependencies can have conditions
+// Simplified enum with just the essential dependency types
+enum DependencyLogic {
+  all,        // All dependencies must be completed (was strictAnd)
+  any,        // At least one dependency must be completed (was anyOr)
+  weighted,   // Weighted completion with threshold
 }
 
 class TaskDependenciesManager extends StatefulWidget {
@@ -22,10 +18,8 @@ class TaskDependenciesManager extends StatefulWidget {
 }
 
 class _TaskDependenciesManagerState extends State<TaskDependenciesManager> {
-  List<Map<String, dynamic>> allTasks = [];
-  List<Map<String, dynamic>> dependencyChains = [];
+  List<TaskItem> allTasks = [];
   bool isLoading = true;
-  DependencyLogic selectedLogic = DependencyLogic.strictAnd;
 
   @override
   void initState() {
@@ -40,86 +34,15 @@ class _TaskDependenciesManagerState extends State<TaskDependenciesManager> {
       final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser == null) return;
 
-      // Load jobs/tasks created by user
-      final jobsSnapshot = await FirebaseFirestore.instance
-          .collection('jobs')
-          .where('postedBy', isEqualTo: currentUser.uid)
-          .get();
-
-      // Load user's personal tasks
-      final tasksSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .collection('tasks')
-          .get();
-
-      List<Map<String, dynamic>> tasks = [];
-
-      // Add jobs
-      for (var doc in jobsSnapshot.docs) {
-        final data = doc.data();
-        tasks.add({
-          'id': doc.id,
-          'title': data['jobPosition'] ?? 'Untitled Job',
-          'type': 'job',
-          'startDate': data['startDate'],
-          'endDate': data['endDate'],
-          'priority': data['priority'] ?? 'Medium',
-          'dependencies': List<String>.from(data['dependencies'] ?? []),
-          'dependencyLogic': DependencyLogic.values.firstWhere(
-                (e) => e.toString() == data['dependencyLogic'],
-            orElse: () => DependencyLogic.strictAnd,
-          ),
-          'dependencyWeights': Map<String, double>.from(
-              data['dependencyWeights'] ?? {}),
-          'dependencyThreshold': data['dependencyThreshold'] ?? 100.0,
-          'status': data['isCompleted'] == true ? 'Completed' : 'Active',
-          'progress': data['progressPercentage'] ?? 0,
-          'isBlocked': false, // Will be calculated
-          'blockingReasons': <String>[],
-        });
-      }
-
-      // Add personal tasks
-      for (var doc in tasksSnapshot.docs) {
-        final data = doc.data();
-        if (data['tasks'] != null) {
-          for (var task in data['tasks']) {
-            tasks.add({
-              'id': '${doc.id}_${task['title']}',
-              'title': task['title'] ?? 'Untitled Task',
-              'type': 'personal',
-              'startDate': doc.id,
-              'endDate': doc.id,
-              'priority': task['priority'] ?? 'Medium',
-              'dependencies': List<String>.from(task['dependencies'] ?? []),
-              'dependencyLogic': DependencyLogic.values.firstWhere(
-                    (e) => e.toString() == task['dependencyLogic'],
-                orElse: () => DependencyLogic.strictAnd,
-              ),
-              'dependencyWeights': Map<String, double>.from(
-                  task['dependencyWeights'] ?? {}),
-              'dependencyThreshold': task['dependencyThreshold'] ?? 100.0,
-              'status': task['completed'] == true ? 'Completed' : 'Active',
-              'progress': task['completed'] == true ? 100 : (task['progress'] ??
-                  0),
-              'isBlocked': false,
-              'blockingReasons': <String>[],
-            });
-          }
-        }
-      }
+      final tasks = await _fetchUserTasks(currentUser.uid);
 
       // Calculate blocking status for all tasks
       for (var task in tasks) {
-        final blockingResult = _calculateBlockingStatus(task, tasks);
-        task['isBlocked'] = blockingResult['isBlocked'];
-        task['blockingReasons'] = blockingResult['reasons'];
+        task.updateBlockingStatus(tasks);
       }
 
       setState(() {
         allTasks = tasks;
-        _analyzeDependencyChains();
         isLoading = false;
       });
     } catch (e) {
@@ -128,72 +51,323 @@ class _TaskDependenciesManagerState extends State<TaskDependenciesManager> {
     }
   }
 
-  Map<String, dynamic> _calculateBlockingStatus(Map<String, dynamic> task,
-      List<Map<String, dynamic>> allTasks) {
-    List<String> blockingReasons = [];
-    bool isBlocked = false;
+  Future<List<TaskItem>> _fetchUserTasks(String userId) async {
+    List<TaskItem> tasks = [];
 
-    if (task['dependencies'].isEmpty) {
-      return {'isBlocked': false, 'reasons': blockingReasons};
+    // Load jobs
+    final jobsSnapshot = await FirebaseFirestore.instance
+        .collection('jobs')
+        .where('postedBy', isEqualTo: userId)
+        .get();
+
+    for (var doc in jobsSnapshot.docs) {
+      tasks.add(TaskItem.fromJobDocument(doc));
     }
 
-    final dependencies = task['dependencies'] as List<String>;
-    final logic = task['dependencyLogic'] as DependencyLogic;
-    final weights = task['dependencyWeights'] as Map<String, double>;
-    final threshold = task['dependencyThreshold'] as double;
+    // Load personal tasks
+    final tasksSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .collection('tasks')
+        .get();
 
-    List<Map<String, dynamic>> dependencyTasks = [];
+    for (var doc in tasksSnapshot.docs) {
+      final data = doc.data();
+      if (data['tasks'] != null) {
+        for (var taskData in data['tasks']) {
+          tasks.add(TaskItem.fromPersonalTask(doc.id, taskData));
+        }
+      }
+    }
 
-    // Get dependency task details
-    for (String depId in dependencies) {
-      final depTask = allTasks.firstWhere(
-            (t) => t['id'] == depId,
-        orElse: () =>
-        {
-          'id': depId,
-          'title': 'Unknown Task',
-          'status': 'Unknown',
-          'progress': 0
+    return tasks;
+  }
+
+  // Simplified dependency configuration
+  void _showDependencyConfigDialog(TaskItem task) {
+    showDialog(
+      context: context,
+      builder: (context) => DependencyConfigDialog(
+        task: task,
+        allTasks: allTasks,
+        onSave: (updatedTask) async {
+          await _updateTaskDependencies(updatedTask);
+          _loadAllTasks();
         },
+      ),
+    );
+  }
+
+  Future<void> _updateTaskDependencies(TaskItem task) async {
+    try {
+      if (task.type == 'job') {
+        await FirebaseFirestore.instance
+            .collection('jobs')
+            .doc(task.id)
+            .update({
+          'dependencies': task.dependencies,
+          'dependencyLogic': task.dependencyLogic.toString(),
+          'dependencyWeights': task.dependencyWeights,
+          'dependencyThreshold': task.dependencyThreshold,
+        });
+      }
+      // Handle personal tasks update here if needed
+
+      await _logActivity('Updated Dependencies', task.id, task.title);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Dependencies updated for ${task.title}!'),
+          backgroundColor: Colors.green,
+        ),
       );
-      dependencyTasks.add(depTask);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
+  }
 
-    switch (logic) {
-      case DependencyLogic.strictAnd:
-        for (var depTask in dependencyTasks) {
-          if (depTask['status'] != 'Completed') {
+  Future<void> _logActivity(String action, String taskId, String taskTitle) async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('activityLog')
+          .add({
+        'action': action,
+        'taskId': taskId,
+        'taskTitle': taskTitle,
+        'timestamp': Timestamp.now(),
+        'details': {
+          'type': 'dependency_update',
+        },
+      });
+    } catch (e) {
+      print('Error logging activity: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFB2DFDB), Colors.white],
+        ),
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          title: Text(
+            'Task Dependencies',
+            style: GoogleFonts.poppins(
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+          backgroundColor: const Color(0xFF006D77),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh, color: Colors.white),
+              onPressed: _loadAllTasks,
+              tooltip: 'Refresh Tasks',
+            ),
+          ],
+        ),
+        body: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : Column(
+          children: [
+            Card(
+              margin: const EdgeInsets.all(16),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    Column(
+                      children: [
+                        Text(
+                          '${allTasks.length}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green,
+                          ),
+                        ),
+                        Text('Total Tasks', style: GoogleFonts.poppins(fontSize: 12)),
+                      ],
+                    ),
+                    Column(
+                      children: [
+                        Text(
+                          '${allTasks.where((t) => t.isBlocked).length}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.red,
+                          ),
+                        ),
+                        Text('Blocked', style: GoogleFonts.poppins(fontSize: 12)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Expanded(
+              child: allTasks.isEmpty
+                  ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.link_off, size: 64, color: Colors.grey[400]),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No tasks found.',
+                      style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              )
+                  : ListView.builder(
+                itemCount: allTasks.length,
+                itemBuilder: (context, index) => TaskCard(
+                  task: allTasks[index],
+                  allTasks: allTasks,
+                  onConfigureDependencies: () => _showDependencyConfigDialog(allTasks[index]),
+                  onDependencyChanged: _loadAllTasks,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Simplified Task Item class
+class TaskItem {
+  final String id;
+  final String title;
+  final String type;
+  final String priority;
+  final String status;
+  final int progress;
+  List<String> dependencies;
+  DependencyLogic dependencyLogic;
+  Map<String, double> dependencyWeights;
+  double dependencyThreshold;
+  bool isBlocked;
+  List<String> blockingReasons;
+
+  TaskItem({
+    required this.id,
+    required this.title,
+    required this.type,
+    required this.priority,
+    required this.status,
+    required this.progress,
+    required this.dependencies,
+    required this.dependencyLogic,
+    required this.dependencyWeights,
+    required this.dependencyThreshold,
+    this.isBlocked = false,
+    this.blockingReasons = const [],
+  });
+
+  factory TaskItem.fromJobDocument(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+
+    return TaskItem(
+      id: doc.id,
+      title: data['jobPosition'] ?? 'Untitled Job',
+      type: 'job',
+      priority: data['priority'] ?? 'Medium',
+      status: data['isCompleted'] == true ? 'Completed' : 'Active',
+      progress: data['progressPercentage'] ?? 0,
+      dependencies: List<String>.from(data['dependencies'] ?? []),
+      dependencyLogic: _parseDependencyLogic(data['dependencyLogic']),
+      dependencyWeights: Map<String, double>.from(data['dependencyWeights'] ?? {}),
+      dependencyThreshold: data['dependencyThreshold'] ?? 100.0,
+    );
+  }
+
+  factory TaskItem.fromPersonalTask(String docId, Map<String, dynamic> taskData) {
+    return TaskItem(
+      id: '${docId}_${taskData['title']}',
+      title: taskData['title'] ?? 'Untitled Task',
+      type: 'personal',
+      priority: taskData['priority'] ?? 'Medium',
+      status: taskData['completed'] == true ? 'Completed' : 'Active',
+      progress: taskData['completed'] == true ? 100 : (taskData['progress'] ?? 0),
+      dependencies: List<String>.from(taskData['dependencies'] ?? []),
+      dependencyLogic: _parseDependencyLogic(taskData['dependencyLogic']),
+      dependencyWeights: Map<String, double>.from(taskData['dependencyWeights'] ?? {}),
+      dependencyThreshold: taskData['dependencyThreshold'] ?? 100.0, // Changed 'data' to 'taskData'
+    );
+  }
+
+  static DependencyLogic _parseDependencyLogic(dynamic logic) {
+    if (logic == null) return DependencyLogic.all;
+
+    final logicStr = logic.toString();
+    if (logicStr.contains('any') || logicStr.contains('anyOr')) {
+      return DependencyLogic.any;
+    } else if (logicStr.contains('weighted')) {
+      return DependencyLogic.weighted;
+    } else {
+      return DependencyLogic.all;
+    }
+  }
+
+  // Simplified blocking calculation
+  void updateBlockingStatus(List<TaskItem> allTasks) {
+    blockingReasons = [];
+    isBlocked = false;
+
+    if (dependencies.isEmpty) return;
+
+    final dependencyTasks = dependencies
+        .map((depId) => allTasks.firstWhere(
+          (task) => task.id == depId,
+      orElse: () => TaskItem(
+        id: depId,
+        title: 'Unknown Task',
+        type: 'unknown',
+        priority: 'Medium',
+        status: 'Unknown',
+        progress: 0,
+        dependencies: [],
+        dependencyLogic: DependencyLogic.all,
+        dependencyWeights: {},
+        dependencyThreshold: 100.0,
+      ),
+    ))
+        .toList();
+
+    switch (dependencyLogic) {
+      case DependencyLogic.all:
+        for (var dep in dependencyTasks) {
+          if (dep.status != 'Completed') {
             isBlocked = true;
-            blockingReasons.add('${depTask['title']} must be completed');
+            blockingReasons.add('${dep.title} must be completed');
           }
         }
         break;
 
-      case DependencyLogic.flexibleAnd:
-        for (var depTask in dependencyTasks) {
-          if (depTask['progress'] == 0) {
-            isBlocked = true;
-            blockingReasons.add('${depTask['title']} must be started');
-          }
-        }
-        break;
-
-      case DependencyLogic.partialOr:
-        final completedCount = dependencyTasks
-            .where((t) => t['status'] == 'Completed')
-            .length;
-        final requiredCount = (dependencies.length * 0.5).ceil();
-        if (completedCount < requiredCount) {
-          isBlocked = true;
-          blockingReasons.add('At least $requiredCount of ${dependencies
-              .length} dependencies must be completed');
-        }
-        break;
-
-      case DependencyLogic.anyOr:
-        final hasAnyCompleted = dependencyTasks.any((t) =>
-        t['status'] == 'Completed');
-        if (!hasAnyCompleted) {
+      case DependencyLogic.any:
+        final hasCompleted = dependencyTasks.any((dep) => dep.status == 'Completed');
+        if (!hasCompleted) {
           isBlocked = true;
           blockingReasons.add('At least one dependency must be completed');
         }
@@ -203,455 +377,209 @@ class _TaskDependenciesManagerState extends State<TaskDependenciesManager> {
         double totalWeight = 0;
         double completedWeight = 0;
 
-        for (var depTask in dependencyTasks) {
-          final weight = weights[depTask['id']] ?? 1.0;
+        for (var dep in dependencyTasks) {
+          final weight = dependencyWeights[dep.id] ?? 1.0;
           totalWeight += weight;
-          if (depTask['status'] == 'Completed') {
+
+          if (dep.status == 'Completed') {
             completedWeight += weight;
-          } else if (depTask['progress'] > 0) {
-            completedWeight += weight * (depTask['progress'] / 100);
+          } else if (dep.progress > 0) {
+            completedWeight += weight * (dep.progress / 100);
           }
         }
 
-        final completionPercentage = totalWeight > 0 ? (completedWeight /
-            totalWeight) * 100 : 0;
-        if (completionPercentage < threshold) {
+        final completionPercentage = totalWeight > 0 ? (completedWeight / totalWeight) * 100 : 0;
+        if (completionPercentage < dependencyThreshold) {
           isBlocked = true;
           blockingReasons.add(
-              'Weighted completion ${completionPercentage.toStringAsFixed(
-                  1)}% < ${threshold.toStringAsFixed(1)}% required');
-        }
-        break;
-
-      case DependencyLogic.conditional:
-      // Implement conditional logic based on task priority, dates, etc.
-        final highPriorityDeps = dependencyTasks.where((t) =>
-        (t['priority'] == 'High' || t['priority'] == 'Critical') &&
-            t['status'] != 'Completed'
-        ).toList();
-
-        if (highPriorityDeps.isNotEmpty) {
-          isBlocked = true;
-          blockingReasons.add(
-              'High priority dependencies must be completed first');
+            'Weighted completion ${completionPercentage.toStringAsFixed(1)}% < ${dependencyThreshold.toStringAsFixed(1)}% required',
+          );
         }
         break;
     }
-
-    return {'isBlocked': isBlocked, 'reasons': blockingReasons};
   }
+}
 
-  void _analyzeDependencyChains() {
-    dependencyChains.clear();
+// Simplified Task Card Widget
+class TaskCard extends StatelessWidget {
+  final TaskItem task;
+  final List<TaskItem> allTasks;
+  final VoidCallback onConfigureDependencies;
+  final VoidCallback onDependencyChanged;
 
-    for (var task in allTasks) {
-      if (task['dependencies'].isNotEmpty) {
-        List<String> chain = _buildDependencyChain(task['id'], []);
-        if (chain.isNotEmpty) {
-          dependencyChains.add({
-            'rootTask': task,
-            'chain': chain,
-            'isBlocked': task['isBlocked'],
-            'criticalPath': _isCriticalPath(chain),
-            'blockingReasons': task['blockingReasons'],
-          });
-        }
-      }
-    }
-  }
+  const TaskCard({
+    super.key,
+    required this.task,
+    required this.allTasks,
+    required this.onConfigureDependencies,
+    required this.onDependencyChanged,
+  });
 
-  List<String> _buildDependencyChain(String taskId, List<String> visited) {
-    if (visited.contains(taskId)) {
-      return ['CIRCULAR_DEPENDENCY'];
-    }
-
-    visited.add(taskId);
-
-    final task = allTasks.firstWhere(
-          (t) => t['id'] == taskId,
-      orElse: () => {},
-    );
-
-    if (task.isEmpty) return [];
-
-    List<String> chain = [taskId];
-
-    for (String dependency in task['dependencies']) {
-      List<String> subChain = _buildDependencyChain(
-          dependency, List.from(visited));
-      chain.addAll(subChain);
-    }
-
-    return chain;
-  }
-
-  bool _isCriticalPath(List<String> chain) {
-    return chain.length > 3;
-  }
-
-  void _showDependencyConfigDialog(String taskId) {
-    final task = allTasks.firstWhere((t) => t['id'] == taskId);
-    DependencyLogic currentLogic = task['dependencyLogic'];
-    double currentThreshold = task['dependencyThreshold'];
-    Map<String, double> currentWeights = Map.from(task['dependencyWeights']);
-
-    showDialog(
-      context: context,
-      builder: (context) =>
-          StatefulBuilder(
-            builder: (context, setDialogState) =>
-                AlertDialog(
-                  title: Text(
-                    'Configure Dependencies',
-                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: task.isBlocked ? Colors.red[50] : Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: _getPriorityColor(task.priority),
+                  radius: 20,
+                  child: Text(
+                    task.type == 'job' ? 'J' : 'T',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                   ),
-                  content: SizedBox(
-                    width: double.maxFinite,
-                    height: 400,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Task: ${task['title']}',
-                            style: GoogleFonts.poppins(
-                                fontWeight: FontWeight.w500),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Dependency Logic:',
-                            style: GoogleFonts.poppins(
-                                fontWeight: FontWeight.w500),
-                          ),
-                          const SizedBox(height: 8),
-                          DropdownButtonFormField<DependencyLogic>(
-                            value: currentLogic,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 8),
-                            ),
-                            items: DependencyLogic.values.map((logic) {
-                              return DropdownMenuItem(
-                                value: logic,
-                                child: Text(_getDependencyLogicName(logic)),
-                              );
-                            }).toList(),
-                            onChanged: (value) {
-                              setDialogState(() => currentLogic = value!);
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            _getDependencyLogicDescription(currentLogic),
-                            style: GoogleFonts.poppins(
-                                fontSize: 12, color: Colors.grey[600]),
-                          ),
-                          const SizedBox(height: 16),
-                          if (currentLogic == DependencyLogic.weighted) ...[
-                            Text(
-                              'Completion Threshold (%):',
-                              style: GoogleFonts.poppins(fontWeight: FontWeight
-                                  .w500),
-                            ),
-                            const SizedBox(height: 8),
-                            Slider(
-                              value: currentThreshold,
-                              min: 0,
-                              max: 100,
-                              divisions: 20,
-                              label: '${currentThreshold.round()}%',
-                              onChanged: (value) {
-                                setDialogState(() => currentThreshold = value);
-                              },
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Dependency Weights:',
-                              style: GoogleFonts.poppins(fontWeight: FontWeight
-                                  .w500),
-                            ),
-                            const SizedBox(height: 8),
-                            ...task['dependencies'].map<Widget>((depId) {
-                              final depTask = allTasks.firstWhere(
-                                    (t) => t['id'] == depId,
-                                orElse: () => {'title': 'Unknown Task'},
-                              );
-                              final currentWeight = currentWeights[depId] ??
-                                  1.0;
-
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 4),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        depTask['title'],
-                                        style: GoogleFonts.poppins(
-                                            fontSize: 12),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 100,
-                                      child: Slider(
-                                        value: currentWeight,
-                                        min: 0.1,
-                                        max: 5.0,
-                                        divisions: 49,
-                                        label: currentWeight.toStringAsFixed(1),
-                                        onChanged: (value) {
-                                          setDialogState(() =>
-                                          currentWeights[depId] = value);
-                                        },
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }).toList(),
-                          ],
-                        ],
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF006D77),
+                        ),
+                      ),
+                      Text(
+                        'Logic: ${_getDependencyLogicName(task.dependencyLogic)}',
+                        style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.edit, color: Colors.blue),
+                  onPressed: onConfigureDependencies,
+                  tooltip: 'Configure Dependencies',
+                ),
+              ],
+            ),
+            // Dependencies
+            if (task.dependencies.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange),
+                    ),
+                    child: Text(
+                      '${task.dependencies.length} deps',
+                      style: const TextStyle(
+                        color: Colors.orange,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel'),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: task.dependencies.map(_buildDependencyChip).toList(),
+              ),
+            ],
+            // Blocking reasons
+            if (task.isBlocked) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.block, color: Colors.red, size: 16),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Blocked:',
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: Colors.red),
+                        ),
+                      ],
                     ),
-                    ElevatedButton(
-                      onPressed: () async {
-                        await _updateDependencyConfiguration(
-                          taskId,
-                          currentLogic,
-                          currentThreshold,
-                          currentWeights,
-                        );
-                        Navigator.pop(context);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF006D77),
-                      ),
-                      child: const Text(
-                          'Save', style: TextStyle(color: Colors.white)),
+                    ...task.blockingReasons.map(
+                          (reason) => Text('• $reason', style: GoogleFonts.poppins(fontSize: 12)),
                     ),
                   ],
                 ),
-          ),
+              ),
+            ],
+            // Progress
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Progress: ${task.progress}%',
+                        style: GoogleFonts.poppins(fontSize: 12),
+                      ),
+                      const SizedBox(height: 4),
+                      LinearProgressIndicator(
+                        value: task.progress / 100,
+                        backgroundColor: Colors.grey[300],
+                        valueColor: AlwaysStoppedAnimation<Color>(_getProgressColor(task.progress)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  String _getDependencyLogicName(DependencyLogic logic) {
-    switch (logic) {
-      case DependencyLogic.strictAnd:
-        return 'Strict AND (All Complete)';
-      case DependencyLogic.flexibleAnd:
-        return 'Flexible AND (All Started)';
-      case DependencyLogic.partialOr:
-        return 'Partial OR (50% Complete)';
-      case DependencyLogic.anyOr:
-        return 'Any OR (One Complete)';
-      case DependencyLogic.weighted:
-        return 'Weighted (Custom Threshold)';
-      case DependencyLogic.conditional:
-        return 'Conditional (Priority Based)';
-    }
-  }
+  Widget _buildDependencyChip(String depId) {
+    final dep = allTasks.firstWhere(
+          (task) => task.id == depId,
+      orElse: () => TaskItem(
+        id: depId,
+        title: 'Unknown',
+        type: 'unknown',
+        priority: 'Medium',
+        status: 'Unknown',
+        progress: 0,
+        dependencies: [],
+        dependencyLogic: DependencyLogic.all,
+        dependencyWeights: {},
+        dependencyThreshold: 100.0,
+      ),
+    );
 
-  String _getDependencyLogicDescription(DependencyLogic logic) {
-    switch (logic) {
-      case DependencyLogic.strictAnd:
-        return 'Task can only start when ALL dependencies are 100% completed.';
-      case DependencyLogic.flexibleAnd:
-        return 'Task can start when ALL dependencies have been started (>0% progress).';
-      case DependencyLogic.partialOr:
-        return 'Task can start when at least 50% of dependencies are completed.';
-      case DependencyLogic.anyOr:
-        return 'Task can start when ANY ONE dependency is completed.';
-      case DependencyLogic.weighted:
-        return 'Dependencies have different weights. Task starts when weighted completion reaches threshold.';
-      case DependencyLogic.conditional:
-        return 'High priority dependencies must be completed first, others can be flexible.';
-    }
-  }
-
-  Future<void> _updateDependencyConfiguration(String taskId,
-      DependencyLogic logic,
-      double threshold,
-      Map<String, double> weights,) async {
-    try {
-      final task = allTasks.firstWhere((t) => t['id'] == taskId);
-
-      if (task['type'] == 'job') {
-        await FirebaseFirestore.instance
-            .collection('jobs')
-            .doc(taskId)
-            .update({
-          'dependencyLogic': logic.toString(),
-          'dependencyThreshold': threshold,
-          'dependencyWeights': weights,
-        });
-      } else {
-        // Handle personal tasks - this would require more complex logic
-        // to update the nested task structure
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Dependency configuration updated successfully!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-
-      _loadAllTasks(); // Reload to recalculate blocking status
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error updating configuration: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  void _addDependency(String taskId, String dependencyId) async {
-    try {
-      final task = allTasks.firstWhere((t) => t['id'] == taskId);
-
-      if (task['type'] == 'job') {
-        await FirebaseFirestore.instance
-            .collection('jobs')
-            .doc(taskId)
-            .update({
-          'dependencies': FieldValue.arrayUnion([dependencyId]),
-        });
-      }
-
-      _loadAllTasks();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Dependency added successfully!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error adding dependency: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  void _removeDependency(String taskId, String dependencyId) async {
-    try {
-      final task = allTasks.firstWhere((t) => t['id'] == taskId);
-
-      if (task['type'] == 'job') {
-        await FirebaseFirestore.instance
-            .collection('jobs')
-            .doc(taskId)
-            .update({
-          'dependencies': FieldValue.arrayRemove([dependencyId]),
-        });
-      }
-
-      _loadAllTasks();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Dependency removed successfully!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error removing dependency: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  void _showAddDependencyDialog(String taskId) {
-    final task = allTasks.firstWhere((t) => t['id'] == taskId);
-    final availableTasks = allTasks
-        .where((t) =>
-    t['id'] != taskId && !task['dependencies'].contains(t['id']))
-        .toList();
-
-    showDialog(
-      context: context,
-      builder: (context) =>
-          AlertDialog(
-            title: Text(
-              'Add Dependency',
-              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-            ),
-            content: SizedBox(
-              width: double.maxFinite,
-              height: 300,
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: availableTasks.length,
-                itemBuilder: (context, index) {
-                  final availableTask = availableTasks[index];
-                  return ListTile(
-                    title: Text(
-                      availableTask['title'],
-                      style: GoogleFonts.poppins(),
-                    ),
-                    subtitle: Text(
-                      'Type: ${availableTask['type']} | Priority: ${availableTask['priority']} | Progress: ${availableTask['progress']}%',
-                      style: GoogleFonts.poppins(fontSize: 12),
-                    ),
-                    leading: CircleAvatar(
-                      backgroundColor: _getPriorityColor(
-                          availableTask['priority']),
-                      child: Text(
-                        availableTask['type'] == 'job' ? 'J' : 'T',
-                        style: const TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    trailing: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _getStatusColor(availableTask['status'])
-                            .withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: _getStatusColor(availableTask['status'])),
-                      ),
-                      child: Text(
-                        availableTask['status'],
-                        style: TextStyle(
-                          color: _getStatusColor(availableTask['status']),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _addDependency(taskId, availableTask['id']);
-                    },
-                  );
-                },
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-            ],
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: _getStatusColor(dep.status).withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _getStatusColor(dep.status)),
+      ),
+      child: Text(
+        '${dep.title} (${dep.progress}%)',
+        style: GoogleFonts.poppins(fontSize: 10),
+      ),
     );
   }
 
@@ -676,417 +604,215 @@ class _TaskDependenciesManagerState extends State<TaskDependenciesManager> {
         return Colors.blue;
       case 'Completed':
         return Colors.green;
-      case 'Blocked':
-        return Colors.red;
       default:
         return Colors.grey;
     }
   }
 
-  Widget _buildTaskCard(Map<String, dynamic> task) {
-    final isBlocked = task['isBlocked'] as bool;
-    final blockingReasons = task['blockingReasons'] as List<String>;
-    final dependencyLogic = task['dependencyLogic'] as DependencyLogic;
+  Color _getProgressColor(int progress) {
+    if (progress < 30) return Colors.red;
+    if (progress < 70) return Colors.orange;
+    return Colors.green;
+  }
 
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color: isBlocked ? Colors.red[50] : Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: _getPriorityColor(task['priority']),
-                  radius: 20,
-                  child: Text(
-                    task['type'] == 'job' ? 'J' : 'T',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        task['title'],
-                        style: GoogleFonts.poppins(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: const Color(0xFF006D77),
-                        ),
-                      ),
-                      Text(
-                        'Logic: ${_getDependencyLogicName(dependencyLogic)}',
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      if (dependencyLogic == DependencyLogic.weighted)
-                        Text(
-                          'Threshold: ${task['dependencyThreshold']}%',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: isBlocked ? Colors.red : _getStatusColor(
-                            task['status']).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: isBlocked ? Colors.red : _getStatusColor(
-                                task['status'])),
-                      ),
-                      child: Text(
-                        isBlocked ? 'BLOCKED' : task['status'],
-                        style: TextStyle(
-                          color: isBlocked ? Colors.red : _getStatusColor(
-                              task['status']),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    IconButton(
-                      icon: const Icon(Icons.settings, size: 20),
-                      onPressed: () => _showDependencyConfigDialog(task['id']),
-                      tooltip: 'Configure Dependencies',
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            if (task['dependencies'].isNotEmpty) ...[
-              const SizedBox(height: 12),
+  String _getDependencyLogicName(DependencyLogic logic) {
+    switch (logic) {
+      case DependencyLogic.all:
+        return 'All Complete';
+      case DependencyLogic.any:
+        return 'Any Complete';
+      case DependencyLogic.weighted:
+        return 'Weighted';
+    }
+  }
+}
+
+// Simplified Dependency Configuration Dialog
+class DependencyConfigDialog extends StatefulWidget {
+  final TaskItem task;
+  final List<TaskItem> allTasks;
+  final Function(TaskItem) onSave;
+
+  const DependencyConfigDialog({
+    super.key,
+    required this.task,
+    required this.allTasks,
+    required this.onSave,
+  });
+
+  @override
+  State<DependencyConfigDialog> createState() => _DependencyConfigDialogState();
+}
+
+class _DependencyConfigDialogState extends State<DependencyConfigDialog> {
+  late DependencyLogic selectedLogic;
+  late double threshold;
+  late Map<String, double> weights;
+  late List<String> dependencies;
+
+  @override
+  void initState() {
+    super.initState();
+    selectedLogic = widget.task.dependencyLogic;
+    threshold = widget.task.dependencyThreshold;
+    weights = Map.from(widget.task.dependencyWeights);
+    dependencies = List.from(widget.task.dependencies);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        'Configure Dependencies',
+        style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: 400,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Text(
-                'Dependencies (${task['dependencies'].length}):',
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: const Color(0xFF006D77),
-                ),
+                'Task: ${widget.task.title}',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
               ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: task['dependencies'].map<Widget>((depId) {
-                  final depTask = allTasks.firstWhere(
-                        (t) => t['id'] == depId,
-                    orElse: () =>
-                    {
-                      'title': 'Unknown Task',
-                      'status': 'Unknown',
-                      'progress': 0
-                    },
-                  );
-
-                  final weight = task['dependencyWeights'][depId] ?? 1.0;
-
-                  return Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _getStatusColor(depTask['status']).withOpacity(
-                          0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _getStatusColor(depTask['status']),
-                        width: 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              depTask['title'],
-                              style: GoogleFonts.poppins(fontSize: 10),
-                            ),
-                            if (dependencyLogic == DependencyLogic.weighted)
-                              Text(
-                                'Weight: ${weight.toStringAsFixed(1)}',
-                                style: GoogleFonts.poppins(
-                                    fontSize: 8, color: Colors.grey[600]),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${depTask['progress']}%',
-                          style: GoogleFonts.poppins(fontSize: 8),
-                        ),
-                        const SizedBox(width: 4),
-                        GestureDetector(
-                          onTap: () => _removeDependency(task['id'], depId),
-                          child: Icon(
-                            Icons.close,
-                            size: 12,
-                            color: _getStatusColor(depTask['status']),
-                          ),
-                        ),
-                      ],
+              const SizedBox(height: 16),
+              // Logic selection
+              Text(
+                'Dependency Logic:',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+              ),
+              DropdownButtonFormField<DependencyLogic>(
+                value: selectedLogic,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                ),
+                items: DependencyLogic.values.map((logic) {
+                  return DropdownMenuItem(
+                    value: logic,
+                    child: Text(
+                      _getLogicName(logic),
+                      style: GoogleFonts.poppins(fontSize: 12),
                     ),
                   );
                 }).toList(),
+                onChanged: (value) => setState(() => selectedLogic = value!),
               ),
-            ],
-            if (isBlocked && blockingReasons.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.red[100],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.block, color: Colors.red, size: 16),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Blocking Reasons:',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.red[800],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    ...blockingReasons.map((reason) =>
-                        Padding(
-                          padding: const EdgeInsets.only(left: 20),
-                          child: Text(
-                            '• $reason',
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: Colors.red[700],
-                            ),
-                          ),
-                        )),
-                  ],
-                ),
+              const SizedBox(height: 16),
+              Text(
+                _getLogicDescription(selectedLogic),
+                style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
               ),
-            ],
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Progress: ${task['progress']}%',
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    SizedBox(
-                      width: 150,
-                      child: LinearProgressIndicator(
-                        value: task['progress'] / 100,
-                        backgroundColor: Colors.grey[300],
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          task['progress'] < 30
-                              ? Colors.red
-                              : task['progress'] < 70
-                              ? Colors.orange
-                              : Colors.green,
-                        ),
-                      ),
-                    ),
-                  ],
+              // Threshold for weighted logic
+              if (selectedLogic == DependencyLogic.weighted) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'Threshold: ${threshold.round()}%',
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
                 ),
-                ElevatedButton.icon(
-                  onPressed: () => _showAddDependencyDialog(task['id']),
-                  icon: const Icon(Icons.add_link, size: 16),
-                  label: const Text('Add Dependency'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF006D77),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    textStyle: GoogleFonts.poppins(fontSize: 12),
-                  ),
+                Slider(
+                  value: threshold,
+                  min: 0,
+                  max: 100,
+                  divisions: 20,
+                  label: '${threshold.round()}%',
+                  onChanged: (value) => setState(() => threshold = value),
+                  activeColor: const Color(0xFF006D77),
                 ),
               ],
-            ),
-          ],
+              const SizedBox(height: 16),
+              Text(
+                'Dependencies: ${dependencies.length} selected',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+              ),
+              // Dependencies list
+              ...widget.allTasks
+                  .where((task) => task.id != widget.task.id)
+                  .map((task) {
+                final isSelected = dependencies.contains(task.id);
+                return CheckboxListTile(
+                  title: Text(task.title, style: GoogleFonts.poppins(fontSize: 12)),
+                  subtitle: Text(
+                    '${task.type} - ${task.progress}%',
+                    style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey[600]),
+                  ),
+                  value: isSelected,
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == true) {
+                        dependencies.add(task.id);
+                        weights[task.id] = 1.0;
+                      } else {
+                        dependencies.remove(task.id);
+                        weights.remove(task.id);
+                      }
+                    });
+                  },
+                );
+              }),
+            ],
+          ),
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(
+            'Cancel',
+            style: GoogleFonts.poppins(color: Colors.grey),
+          ),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final updatedTask = TaskItem(
+              id: widget.task.id,
+              title: widget.task.title,
+              type: widget.task.type,
+              priority: widget.task.priority,
+              status: widget.task.status,
+              progress: widget.task.progress,
+              dependencies: dependencies,
+              dependencyLogic: selectedLogic,
+              dependencyWeights: weights,
+              dependencyThreshold: threshold,
+            );
+            widget.onSave(updatedTask);
+            Navigator.pop(context);
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF006D77),
+          ),
+          child: Text(
+            'Save',
+            style: GoogleFonts.poppins(color: Colors.white),
+          ),
+        ),
+      ],
     );
   }
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'Task Dependencies',
-          style: GoogleFonts.poppins(
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
-        ),
-        backgroundColor: const Color(0xFF006D77),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add, color: Colors.white),
-            tooltip: 'Add New Task',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const AddJobPage(),
-                ),
-              ).then((_) => _loadAllTasks()); // Reload tasks after adding
-            },
-          ),
-        ],
-      ),
-      body: isLoading
-          ? const Center(
-        child: CircularProgressIndicator(
-          color: Color(0xFF006D77),
-        ),
-      )
-          : allTasks.isEmpty
-          ? Center(
-        child: Text(
-          'No tasks available. Add a task to get started!',
-          style: GoogleFonts.poppins(
-            fontSize: 16,
-            color: Colors.grey[600],
-          ),
-        ),
-      )
-          : Column(
-        children: [
-          // Optional: Dependency Chains Summary
-          if (dependencyChains.isNotEmpty) ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              color: Colors.grey[100],
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Dependency Chains (${dependencyChains.length})',
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: const Color(0xFF006D77),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 60,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: dependencyChains.length,
-                      itemBuilder: (context, index) {
-                        final chain = dependencyChains[index];
-                        final isCritical = chain['criticalPath'] as bool;
-                        return Container(
-                          margin: const EdgeInsets.only(right: 8),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isCritical
-                                ? Colors.red[50]
-                                : Colors.green[50],
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: isCritical
-                                  ? Colors.red
-                                  : Colors.green,
-                            ),
-                          ),
-                          child: Column(
-                            mainAxisAlignment:
-                            MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                'Chain: ${(chain['rootTask'] as Map<String, dynamic>)['title']}',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              Text(
-                                'Tasks: ${(chain['chain'] as List).length}',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 10,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-          ],
-          // Task List
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _loadAllTasks,
-              color: const Color(0xFF006D77),
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                itemCount: allTasks.length,
-                itemBuilder: (context, index) {
-                  return _buildTaskCard(allTasks[index]);
-                },
-              ),
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const AddJobPage(),
-            ),
-          ).then((_) => _loadAllTasks());
-        },
-        backgroundColor: const Color(0xFF006D77),
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
-    );
+
+  String _getLogicName(DependencyLogic logic) {
+    switch (logic) {
+      case DependencyLogic.all:
+        return 'All Dependencies Must Complete';
+      case DependencyLogic.any:
+        return 'Any One Dependency Must Complete';
+      case DependencyLogic.weighted:
+        return 'Weighted Completion Threshold';
+    }
+  }
+
+  String _getLogicDescription(DependencyLogic logic) {
+    switch (logic) {
+      case DependencyLogic.all:
+        return 'Task can only start when ALL dependencies are 100% completed.';
+      case DependencyLogic.any:
+        return 'Task can start when ANY ONE dependency is completed.';
+      case DependencyLogic.weighted:
+        return 'Dependencies have weights. Task starts when weighted completion reaches threshold.';
+    }
   }
 }

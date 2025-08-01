@@ -2,7 +2,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:fyp/Add%20Job%20Module/ManageApplicantPage.dart';
+import 'package:fyp/Task%20Progress/TaskProgressPage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import 'package:fyp/Add%20Job%20Module/JobDetailPage.dart';
@@ -76,7 +76,7 @@ class _EditingJobsPageState extends State<EditingJobsPage> {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => ManageApplicantsPage(jobId: jobId, jobPosition: data['jobPosition'] ?? 'Job'),
+            builder: (context) => TaskProgressPage(),
           ),
         ).then((_) => setState(() {}));
       }
