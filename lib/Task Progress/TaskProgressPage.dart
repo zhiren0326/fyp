@@ -38,6 +38,13 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+
+    final user = FirebaseAuth.instance.currentUser;
+    print('TaskProgressPage - User authenticated: ${user != null}');
+    print('TaskProgressPage - User ID: ${user?.uid}');
+    if (user != null) {
+      print('TaskProgressPage - User email: ${user.email}');
+    }
   }
 
   @override
@@ -693,12 +700,13 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
       return Center(child: Text('Please log in.', style: GoogleFonts.poppins()));
     }
 
+    print('Current user ID: ${currentUser.uid}');
+
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('users')
           .doc(currentUser.uid)
           .collection('taskProgress')
-          .orderBy('lastUpdated', descending: true) // Add explicit ordering
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
