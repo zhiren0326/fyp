@@ -79,6 +79,7 @@ dependencies:
   path: ^1.8.3
   flutter_tts: ^3.8.3
   async: ^2.13.0
+  fl_chart: 0.66.0
 
 dev_dependencies:
   flutter_test:

@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
-import '../Notification Module/NotificationService.dart';
 
 enum TaskStatus { created, inProgress, completed, paused, blocked, pendingReview }
 
@@ -87,6 +86,339 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
     }
   }
 
+  Future<void> _approveTaskCompletion(String taskId, String employeeId) async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        _showSnackBar('User not authenticated.');
+        return;
+      }
+
+      // Get job details first to calculate points and money
+      final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(taskId).get();
+      if (!jobDoc.exists) {
+        _showSnackBar('Job not found.');
+        return;
+      }
+
+      final jobData = jobDoc.data()!;
+      final jobSalary = (jobData['salary'] ?? 0).toDouble();
+      final jobTitle = jobData['jobPosition'] ?? 'Task';
+
+      // Calculate points based on job details and duration
+      int pointsToAward = _calculatePointsFromJob(jobData);
+
+      // Use batch writes instead of transaction to avoid completion errors
+      final batch = FirebaseFirestore.instance.batch();
+
+      // Get employee's current profile data first
+      final employeeProfileDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('profiledetails')
+          .doc('profile')
+          .get();
+
+      final currentPoints = (employeeProfileDoc.data()?['points'] ?? 0) as int;
+      final currentMoney = (employeeProfileDoc.data()?['totalEarnings'] ?? 0.0) as double;
+      final tasksCompleted = (employeeProfileDoc.data()?['tasksCompleted'] ?? 0) as int;
+
+      // Update taskProgress in employee's collection
+      final taskProgressRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('taskProgress')
+          .doc(taskId);
+
+      batch.update(taskProgressRef, {
+        'completionApproved': true,
+        'status': 'completed',
+        'currentProgress': 100,
+        'lastUpdated': Timestamp.now(),
+        'approvedBy': currentUser.uid,
+        'approvedAt': Timestamp.now(),
+        'pointsAwarded': pointsToAward,
+        'moneyEarned': jobSalary,
+      });
+
+      // Update jobs collection
+      final jobRef = FirebaseFirestore.instance.collection('jobs').doc(taskId);
+      batch.update(jobRef, {
+        'isCompleted': true,
+        'completedAt': Timestamp.now(),
+        'completedBy': employeeId,
+        'pointsAwarded': pointsToAward,
+        'salaryPaid': jobSalary,
+      });
+
+      // Update employee's profile with points
+      final employeeProfileRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('profiledetails')
+          .doc('profile');
+
+      batch.update(employeeProfileRef, {
+        'points': currentPoints + pointsToAward,
+        'totalEarnings': currentMoney + jobSalary,
+        'tasksCompleted': tasksCompleted + 1,
+        'lastPointsUpdate': Timestamp.now(),
+        'lastEarningsUpdate': Timestamp.now(),
+      });
+
+      // Add points history
+      final pointsHistoryRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('pointsHistory')
+          .doc();
+
+      batch.set(pointsHistoryRef, {
+        'points': pointsToAward,
+        'source': 'task_completion',
+        'taskId': taskId,
+        'taskTitle': jobTitle,
+        'timestamp': Timestamp.now(),
+        'description': 'Completed task: $jobTitle',
+      });
+
+      // Add money history
+      final moneyHistoryRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('moneyHistory')
+          .doc();
+
+      batch.set(moneyHistoryRef, {
+        'amount': jobSalary,
+        'source': 'task_completion',
+        'taskId': taskId,
+        'taskTitle': jobTitle,
+        'timestamp': Timestamp.now(),
+        'description': 'Payment for completed task: $jobTitle',
+        'type': 'earning',
+      });
+
+      // Add to task history
+      final taskHistoryRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('taskProgress')
+          .doc(taskId)
+          .collection('history')
+          .doc();
+
+      batch.set(taskHistoryRef, {
+        'notes': 'Task completion approved by employer',
+        'timestamp': Timestamp.now(),
+        'action': 'completion_approved',
+        'approvedBy': currentUser.uid,
+        'pointsAwarded': pointsToAward,
+        'moneyEarned': jobSalary,
+      });
+
+      // Commit all changes
+      await batch.commit();
+
+      // Check and award badges
+      await _checkAndAwardBadges(employeeId);
+
+      // Notify employee
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('notifications')
+          .add({
+        'message': 'Task "$jobTitle" completed! Earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)}',
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+        'type': 'completion_approved',
+        'taskId': taskId,
+        'approvedBy': currentUser.uid,
+        'pointsAwarded': pointsToAward,
+        'moneyEarned': jobSalary,
+      });
+
+      _showSnackBar('Task completion approved! Employee earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)}');
+    } catch (e) {
+      _showSnackBar('Error approving completion: $e');
+    }
+  }
+
+  int _calculatePointsFromJob(Map<String, dynamic> jobData) {
+    // Get task details
+    final estimatedDuration = (jobData['estimatedDuration'] ?? 1).toDouble(); // in hours
+    final priority = jobData['priority'] ?? 'Medium';
+    final isShortTerm = jobData['isShortTerm'] ?? false;
+    final employmentType = jobData['employmentType'] ?? 'Contract';
+    final requiredSkills = jobData['requiredSkill'] as List? ?? [];
+    final salary = (jobData['salary'] ?? 0).toDouble();
+
+    // Base points: 50 points per hour of estimated duration
+    int basePoints = (estimatedDuration * 50).round();
+
+    // Priority multipliers
+    Map<String, double> priorityMultipliers = {
+      'low': 0.8,
+      'medium': 1.0,
+      'high': 1.3,
+      'critical': 1.6,
+    };
+
+    double priorityMultiplier = priorityMultipliers[priority.toLowerCase()] ?? 1.0;
+
+    // Employment type multipliers
+    Map<String, double> employmentMultipliers = {
+      'contract': 1.0,
+      'part-time': 0.9,
+      'full-time': 1.1,
+      'freelance': 1.2,
+      'internship': 0.7,
+    };
+
+    double employmentMultiplier = employmentMultipliers[employmentType.toLowerCase()] ?? 1.0;
+
+    // Skill complexity bonus (5 points per required skill)
+    int skillBonus = requiredSkills.length * 5;
+
+    // Short-term task bonus (encourages quick task completion)
+    int shortTermBonus = isShortTerm ? 20 : 0;
+
+    // Salary tier bonus (additional points for higher-paying tasks)
+    int salaryBonus = 0;
+    if (salary >= 100) salaryBonus = 30;
+    else if (salary >= 50) salaryBonus = 20;
+    else if (salary >= 20) salaryBonus = 10;
+
+    // Calculate final points
+    int finalPoints = ((basePoints * priorityMultiplier * employmentMultiplier).round()
+        + skillBonus + shortTermBonus + salaryBonus);
+
+    // Minimum and maximum bounds
+    if (finalPoints < 20) finalPoints = 20; // Minimum 20 points
+    if (finalPoints > 500) finalPoints = 500; // Maximum 500 points per task
+
+    return finalPoints;
+  }
+
+  Future<void> _checkAndAwardBadges(String employeeId) async {
+    try {
+      // Get employee's current stats
+      final profileDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('profiledetails')
+          .doc('profile')
+          .get();
+
+      if (!profileDoc.exists) return;
+
+      final profileData = profileDoc.data()!;
+      final tasksCompleted = (profileData['tasksCompleted'] ?? 0) as int;
+      final totalEarnings = (profileData['totalEarnings'] ?? 0.0) as double;
+      final points = (profileData['points'] ?? 0) as int;
+
+      // Get current badges
+      final badgesDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('badges')
+          .doc('achievements')
+          .get();
+
+      List<String> currentBadges = [];
+      if (badgesDoc.exists) {
+        currentBadges = List<String>.from(badgesDoc.data()?['earnedBadges'] ?? []);
+      }
+
+      List<String> newBadges = [];
+
+      // Check for task completion badges
+      if (tasksCompleted >= 1 && !currentBadges.contains('first_task')) {
+        newBadges.add('first_task');
+      }
+      if (tasksCompleted >= 5 && !currentBadges.contains('task_warrior')) {
+        newBadges.add('task_warrior');
+      }
+      if (tasksCompleted >= 10 && !currentBadges.contains('dedicated_worker')) {
+        newBadges.add('dedicated_worker');
+      }
+      if (tasksCompleted >= 25 && !currentBadges.contains('task_master')) {
+        newBadges.add('task_master');
+      }
+      if (tasksCompleted >= 50 && !currentBadges.contains('legend')) {
+        newBadges.add('legend');
+      }
+
+      // Check for earnings badges
+      if (totalEarnings >= 100 && !currentBadges.contains('first_earnings')) {
+        newBadges.add('first_earnings');
+      }
+      if (totalEarnings >= 1000 && !currentBadges.contains('money_maker')) {
+        newBadges.add('money_maker');
+      }
+      if (totalEarnings >= 5000 && !currentBadges.contains('high_earner')) {
+        newBadges.add('high_earner');
+      }
+
+      // Check for points badges
+      if (points >= 500 && !currentBadges.contains('point_collector')) {
+        newBadges.add('point_collector');
+      }
+      if (points >= 2000 && !currentBadges.contains('point_master')) {
+        newBadges.add('point_master');
+      }
+
+      // Award new badges
+      if (newBadges.isNotEmpty) {
+        final updatedBadges = [...currentBadges, ...newBadges];
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(employeeId)
+            .collection('badges')
+            .doc('achievements')
+            .set({
+          'earnedBadges': updatedBadges,
+          'lastUpdated': Timestamp.now(),
+          'totalBadges': updatedBadges.length,
+        }, SetOptions(merge: true));
+
+        // Send notification for new badges
+        for (String badge in newBadges) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(employeeId)
+              .collection('notifications')
+              .add({
+            'message': 'New badge earned: ${_getBadgeName(badge)}!',
+            'timestamp': FieldValue.serverTimestamp(),
+            'read': false,
+            'type': 'badge_earned',
+            'badgeId': badge,
+          });
+        }
+      }
+    } catch (e) {
+      print('Error checking badges: $e');
+    }
+  }
+
+  String _getBadgeName(String badgeId) {
+    Map<String, String> badgeNames = {
+      'first_task': 'First Task Completed',
+      'task_warrior': 'Task Warrior',
+      'dedicated_worker': 'Dedicated Worker',
+      'task_master': 'Task Master',
+      'legend': 'Legend',
+      'first_earnings': 'First Earnings',
+      'money_maker': 'Money Maker',
+      'high_earner': 'High Earner',
+      'point_collector': 'Point Collector',
+      'point_master': 'Point Master',
+    };
+    return badgeNames[badgeId] ?? badgeId;
+  }
   Future<void> _updateTaskProgress(String taskId, int newProgress, {String? completionNotes}) async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
@@ -310,6 +642,138 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
     } catch (e) {
       _showSnackBar('Error adding milestone: $e');
     }
+  }
+
+  Future<void> _rejectTaskCompletion(String taskId, String employeeId, String rejectionReason) async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        _showSnackBar('User not authenticated.');
+        return;
+      }
+
+      // Update taskProgress in employee's collection
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('taskProgress')
+          .doc(taskId)
+          .update({
+        'completionRequested': false,
+        'completionApproved': false,
+        'status': 'inProgress',
+        'lastUpdated': Timestamp.now(),
+        'rejectedBy': currentUser.uid,
+        'rejectedAt': Timestamp.now(),
+        'rejectionReason': rejectionReason,
+      });
+
+      // Add to history
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('taskProgress')
+          .doc(taskId)
+          .collection('history')
+          .add({
+        'notes': 'Task completion rejected: $rejectionReason',
+        'timestamp': Timestamp.now(),
+        'action': 'completion_rejected',
+        'rejectedBy': currentUser.uid,
+        'rejectionReason': rejectionReason,
+      });
+
+      // Notify employee
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeId)
+          .collection('notifications')
+          .add({
+        'message': 'Task completion rejected. Reason: $rejectionReason',
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+        'type': 'completion_rejected',
+        'taskId': taskId,
+        'rejectedBy': currentUser.uid,
+        'rejectionReason': rejectionReason,
+      });
+
+      _showSnackBar('Task completion rejected.');
+    } catch (e) {
+      _showSnackBar('Error rejecting completion: $e');
+    }
+  }
+
+  void _showCompletionReviewDialog(String taskId, String employeeId, String employeeName, String completionNotes) {
+    final rejectionReasonController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Review Task Completion', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Employee: $employeeName', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+              const SizedBox(height: 8),
+              if (completionNotes.isNotEmpty) ...[
+                Text('Completion Notes:', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                const SizedBox(height: 4),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(completionNotes, style: GoogleFonts.poppins()),
+                ),
+                const SizedBox(height: 16),
+              ],
+              Text('Rejection Reason (if rejecting):', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: rejectionReasonController,
+                decoration: InputDecoration(
+                  hintText: 'Enter reason for rejection...',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                maxLines: 3,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: GoogleFonts.poppins()),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final rejectionReason = rejectionReasonController.text.trim();
+              if (rejectionReason.isEmpty) {
+                _showSnackBar('Please provide a rejection reason.');
+                return;
+              }
+              Navigator.pop(context);
+              _rejectTaskCompletion(taskId, employeeId, rejectionReason);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text('Reject', style: GoogleFonts.poppins(color: Colors.white)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _approveTaskCompletion(taskId, employeeId);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: Text('Approve', style: GoogleFonts.poppins(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showProgressUpdateDialog(String taskId, int currentProgress) {
@@ -593,7 +1057,12 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
                   else
                     ...acceptedApplicants.map<Widget>((employeeId) {
                       return FutureBuilder<DocumentSnapshot>(
-                        future: FirebaseFirestore.instance.collection('users').doc(employeeId).get(),
+                        future: FirebaseFirestore.instance
+                            .collection('users')
+                            .doc(employeeId)
+                            .collection('profiledetails')
+                            .doc('profile')
+                            .get(),
                         builder: (context, userSnapshot) {
                           if (!userSnapshot.hasData) {
                             return const SizedBox.shrink();
@@ -636,44 +1105,65 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
                                         'Last updated: ${lastUpdated.toDate().toString().split('.')[0]}',
                                         style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey[600]),
                                       ),
+                                    // Show completion request status
+                                    if (taskData?['completionRequested'] == true && taskData?['completionApproved'] != true) ...[
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.orange[100],
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          'PENDING REVIEW',
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.orange[700],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
+                                trailing: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          '${progress.toStringAsFixed(0)}%',
-                                          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                                    if (taskData?['completionRequested'] == true && taskData?['completionApproved'] != true)
+                                      IconButton(
+                                        icon: const Icon(Icons.rate_review, color: Colors.orange, size: 20),
+                                        onPressed: () => _showCompletionReviewDialog(
+                                          jobId,
+                                          employeeId,
+                                          employeeName,
+                                          taskData?['completionNotes'] ?? '',
                                         ),
-                                        Container(
-                                          width: 40,
-                                          height: 4,
-                                          decoration: BoxDecoration(
-                                            color: Colors.grey[300],
-                                            borderRadius: BorderRadius.circular(2),
-                                          ),
-                                          child: FractionallySizedBox(
-                                            alignment: Alignment.centerLeft,
-                                            widthFactor: progress / 100,
-                                            child: Container(
-                                              decoration: BoxDecoration(
-                                                color: _getStatusColor(status),
-                                                borderRadius: BorderRadius.circular(2),
-                                              ),
+                                        tooltip: 'Review Completion',
+                                      )
+                                    else ...[
+                                      Text(
+                                        '${progress.toStringAsFixed(0)}%',
+                                        style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                                      ),
+                                      Container(
+                                        width: 40,
+                                        height: 4,
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey[300],
+                                          borderRadius: BorderRadius.circular(2),
+                                        ),
+                                        child: FractionallySizedBox(
+                                          alignment: Alignment.centerLeft,
+                                          widthFactor: progress / 100,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: _getStatusColor(status),
+                                              borderRadius: BorderRadius.circular(2),
                                             ),
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                    const SizedBox(width: 8),
-                                    IconButton(
-                                      icon: const Icon(Icons.visibility, color: Colors.teal),
-                                      onPressed: () => _viewEmployeeTaskProgress(jobId, employeeId, jobPosition),
-                                      tooltip: 'View Progress Details',
-                                    ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               );
@@ -692,8 +1182,6 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
   }
 
   // Applied Tasks Tab - Shows tasks the current user is working on
-  // Replace the _buildAppliedTasksTab() method with this:
-
   Widget _buildAppliedTasksTab() {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) {
@@ -729,35 +1217,84 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
           );
         }
 
-        var tasks = snapshot.data!.docs;
+        // Filter tasks to exclude those created by the current user
+        return FutureBuilder<List<QueryDocumentSnapshot>>(
+          future: _filterNonCreatedTasks(snapshot.data!.docs, currentUser.uid),
+          builder: (context, filteredSnapshot) {
+            if (filteredSnapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (filteredSnapshot.hasError) {
+              print('Error filtering tasks: ${filteredSnapshot.error}');
+              return Center(child: Text('Error: ${filteredSnapshot.error}', style: GoogleFonts.poppins()));
+            }
 
-        // Apply filter
-        if (selectedFilter != 'all') {
-          tasks = tasks.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            return data['status']?.toLowerCase() == selectedFilter;
-          }).toList();
-        }
+            final tasks = filteredSnapshot.data ?? [];
 
-        return Column(
-          children: [
-            _buildFilterAndSort(),
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: tasks.length,
-                itemBuilder: (context, index) {
-                  final taskDoc = tasks[index];
-                  final taskData = taskDoc.data() as Map<String, dynamic>;
-                  final taskId = taskDoc.id;
-                  return _buildTaskCard(taskData, taskId);
-                },
-              ),
-            ),
-          ],
+            if (tasks.isEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.work_off_outlined, size: 64, color: Colors.grey[400]),
+                    const SizedBox(height: 16),
+                    Text('No assigned tasks.', style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600])),
+                  ],
+                ),
+              );
+            }
+
+            // Apply status filter
+            var filteredTasks = tasks;
+            if (selectedFilter != 'all') {
+              filteredTasks = tasks.where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                return data['status']?.toLowerCase() == selectedFilter;
+              }).toList();
+            }
+
+            return Column(
+              children: [
+                _buildFilterAndSort(),
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: filteredTasks.length,
+                    itemBuilder: (context, index) {
+                      final taskDoc = filteredTasks[index];
+                      final taskData = taskDoc.data() as Map<String, dynamic>;
+                      final taskId = taskDoc.id;
+                      return _buildTaskCard(taskData, taskId);
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );
+  }
+
+  Future<List<QueryDocumentSnapshot>> _filterNonCreatedTasks(
+      List<QueryDocumentSnapshot> taskDocs, String currentUserId) async {
+    final filteredTasks = <QueryDocumentSnapshot>[];
+
+    for (var taskDoc in taskDocs) {
+      final taskId = taskDoc.id;
+      // Fetch the corresponding job document
+      final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(taskId).get();
+      if (jobDoc.exists) {
+        final jobData = jobDoc.data() as Map<String, dynamic>;
+        final postedBy = jobData['postedBy'] ?? '';
+        // Only include tasks where the current user is not the creator
+        if (postedBy != currentUserId) {
+          filteredTasks.add(taskDoc);
+        }
+      }
+    }
+
+    return filteredTasks;
   }
 
   Widget _buildFilterAndSort() {

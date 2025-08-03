@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:fyp/Reward%20Module/RealtimeLeaderboard.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'BadgesPage.dart';
+import 'MoneyPage.dart';
+
 class RewardsPage extends StatefulWidget {
   const RewardsPage({super.key});
 
@@ -436,6 +439,106 @@ class _RewardsPageState extends State<RewardsPage> {
     );
   }
 
+  Widget _buildQuickActions() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Quick Actions',
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: const Color(0xFF006D77),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildActionCard(
+                  'My Earnings',
+                  'Track your income',
+                  Icons.account_balance_wallet,
+                  Colors.green,
+                      () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const MoneyPage()),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildActionCard(
+                  'Achievements',
+                  'View your badges',
+                  Icons.emoji_events,
+                  Colors.amber,
+                      () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const BadgesPage()),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionCard(String title, String subtitle, IconData icon, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF006D77),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: GoogleFonts.poppins(
+                fontSize: 11,
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -835,6 +938,7 @@ class _RewardsPageState extends State<RewardsPage> {
         child: Column(
           children: [
             _buildHeader(),
+            _buildQuickActions(),
             _buildTopPerformers(),
             _buildRedeemRewards(),
             const SizedBox(height: 20),

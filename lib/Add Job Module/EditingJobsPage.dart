@@ -21,6 +21,64 @@
       print('EditingJobsPage initialized');
     }
 
+    Future<List<QueryDocumentSnapshot>> _getCombinedAppliedJobs(String userId) async {
+      try {
+        // Get all three collections simultaneously
+        final results = await Future.wait([
+          FirebaseFirestore.instance
+              .collection('jobs')
+              .where('applicants', arrayContains: userId)
+              .get(),
+          FirebaseFirestore.instance
+              .collection('jobs')
+              .where('acceptedApplicants', arrayContains: userId)
+              .get(),
+          FirebaseFirestore.instance
+              .collection('jobs')
+              .where('rejectedApplicants', arrayContains: userId)
+              .get(),
+        ]);
+
+        // Combine all documents and remove duplicates
+        final Map<String, QueryDocumentSnapshot> allJobs = {};
+
+        // Add pending applications
+        for (var doc in results[0].docs) {
+          allJobs[doc.id] = doc;
+        }
+
+        // Add accepted applications
+        for (var doc in results[1].docs) {
+          allJobs[doc.id] = doc;
+        }
+
+        // Add rejected applications
+        for (var doc in results[2].docs) {
+          allJobs[doc.id] = doc;
+        }
+
+        // Convert to list and sort by posted date (newest first)
+        final jobsList = allJobs.values.toList();
+        jobsList.sort((a, b) {
+          final aData = a.data() as Map<String, dynamic>;
+          final bData = b.data() as Map<String, dynamic>;
+          final aTimestamp = aData['postedAt'] as Timestamp?;
+          final bTimestamp = bData['postedAt'] as Timestamp?;
+
+          if (aTimestamp == null && bTimestamp == null) return 0;
+          if (aTimestamp == null) return 1;
+          if (bTimestamp == null) return -1;
+
+          return bTimestamp.compareTo(aTimestamp); // Newest first
+        });
+
+        return jobsList;
+      } catch (e) {
+        print('Error getting combined applied jobs: $e');
+        return [];
+      }
+    }
+
     Future<void> _removeJob(String jobId) async {
       showDialog(
         context: context,
@@ -314,19 +372,17 @@
                   },
                 ),
 
+
                 // Applied Jobs Tab
-                StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('jobs')
-                      .where('applicants', arrayContains: currentUser.uid)
-                      .snapshots(),
+                FutureBuilder<List<QueryDocumentSnapshot>>(
+                  future: _getCombinedAppliedJobs(currentUser.uid),
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator());
                     }
 
                     if (snapshot.hasError) {
-                      print('Error in applied jobs StreamBuilder: ${snapshot.error}');
+                      print('Error in applied jobs FutureBuilder: ${snapshot.error}');
                       return Center(child: Text('Error: ${snapshot.error}', style: GoogleFonts.poppins()));
                     }
 
@@ -334,8 +390,8 @@
                       return const Center(child: Text('No data available.', style: TextStyle(fontSize: 16)));
                     }
 
-                    final jobs = snapshot.data!.docs;
-                    print('Found ${jobs.length} applied jobs');
+                    final jobs = snapshot.data!;
+                    print('Found ${jobs.length} applied jobs (pending + accepted + rejected)');
 
                     if (jobs.isEmpty) {
                       return Center(
@@ -345,94 +401,170 @@
                             Icon(Icons.work_off_outlined, size: 64, color: Colors.grey[400]),
                             const SizedBox(height: 16),
                             Text('No applied jobs.', style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600])),
+                            const SizedBox(height: 8),
+                            ElevatedButton.icon(
+                              onPressed: () => setState(() {}), // Refresh
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Refresh'),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                            ),
                           ],
                         ),
                       );
                     }
 
-                    return ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: jobs.length,
-                      itemBuilder: (context, index) {
-                        final doc = jobs[index];
-                        final data = doc.data() as Map<String, dynamic>;
-                        final jobId = doc.id;
-                        final jobPosition = data['jobPosition'] ?? 'Untitled Job';
-                        final isAccepted = (data['acceptedApplicants'] as List?)?.contains(currentUser.uid) ?? false;
-                        final isRejected = (data['rejectedApplicants'] as List?)?.contains(currentUser.uid) ?? false;
-                        final status = isAccepted ? 'Accepted' : isRejected ? 'Rejected' : 'Pending';
-                        final postedAt = data['postedAt'] as Timestamp?;
+                    return RefreshIndicator(
+                      onRefresh: () async => setState(() {}),
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: jobs.length,
+                        itemBuilder: (context, index) {
+                          final doc = jobs[index];
+                          final data = doc.data() as Map<String, dynamic>;
+                          final jobId = doc.id;
+                          final jobPosition = data['jobPosition'] ?? 'Untitled Job';
+                          final isAccepted = (data['acceptedApplicants'] as List?)?.contains(currentUser.uid) ?? false;
+                          final isRejected = (data['rejectedApplicants'] as List?)?.contains(currentUser.uid) ?? false;
+                          final isPending = (data['applicants'] as List?)?.contains(currentUser.uid) ?? false;
 
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 6),
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.all(16),
-                            title: Text(
-                                jobPosition,
-                                style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 16)
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 8),
-                                Text(
-                                    'Applied: ${postedAt?.toDate().toString().split('.')[0] ?? 'N/A'}',
-                                    style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])
-                                ),
-                                const SizedBox(height: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: isAccepted ? Colors.green[100] : isRejected ? Colors.red[100] : Colors.orange[100],
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    'Status: $status',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: isAccepted ? Colors.green[700] : isRejected ? Colors.red[700] : Colors.orange[700],
+                          String status;
+                          Color statusColor;
+                          IconData statusIcon;
+
+                          if (isAccepted) {
+                            status = 'Accepted';
+                            statusColor = Colors.green;
+                            statusIcon = Icons.check_circle;
+                          } else if (isRejected) {
+                            status = 'Rejected';
+                            statusColor = Colors.red;
+                            statusIcon = Icons.cancel;
+                          } else if (isPending) {
+                            status = 'Pending';
+                            statusColor = Colors.orange;
+                            statusIcon = Icons.hourglass_empty;
+                          } else {
+                            status = 'Unknown';
+                            statusColor = Colors.grey;
+                            statusIcon = Icons.help_outline;
+                          }
+
+                          final postedAt = data['postedAt'] as Timestamp?;
+                          final salary = data['salary']?.toString() ?? 'Not specified';
+                          final deadline = data['endDate'] ?? 'No deadline';
+                          final isCompleted = data['isCompleted'] ?? false;
+
+                          return Card(
+                            margin: const EdgeInsets.symmetric(vertical: 6),
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.all(16),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                        jobPosition,
+                                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 16)
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  isAccepted ? Icons.check_circle : isRejected ? Icons.cancel : Icons.hourglass_empty,
-                                  color: isAccepted ? Colors.green : isRejected ? Colors.red : Colors.orange,
-                                ),
-                                if (isAccepted) ...[
-                                  const SizedBox(width: 8),
-                                  IconButton(
-                                    icon: const Icon(Icons.analytics, color: Colors.blue),
-                                    onPressed: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) => TaskProgressPage(
-                                            taskId: jobId,
-                                            taskTitle: jobPosition,
+                                  if (isCompleted)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue[100],
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        'COMPLETED',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 8,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.blue[700],
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 8),
+                                  Text(
+                                      'Posted: ${postedAt?.toDate().toString().split('.')[0] ?? 'N/A'}',
+                                      style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])
+                                  ),
+                                  Text(
+                                      'Salary: RM$salary',
+                                      style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])
+                                  ),
+                                  Text(
+                                      'Deadline: $deadline',
+                                      style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: statusColor.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: statusColor.withOpacity(0.3)),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(statusIcon, size: 12, color: statusColor),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Status: $status',
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: statusColor,
                                           ),
                                         ),
-                                      );
-                                    },
-                                    tooltip: 'View Task Progress',
+                                      ],
+                                    ),
                                   ),
                                 ],
-                              ],
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Show task progress button only for accepted jobs
+                                  if (isAccepted) ...[
+                                    IconButton(
+                                      icon: const Icon(Icons.analytics, color: Colors.blue),
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => TaskProgressPage(
+                                              taskId: jobId,
+                                              taskTitle: jobPosition,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      tooltip: 'View Task Progress',
+                                    ),
+                                  ],
+
+                                  // View details button
+                                  IconButton(
+                                    icon: const Icon(Icons.info_outline, color: Colors.grey),
+                                    onPressed: () => _viewJobDetails(jobId),
+                                    tooltip: 'View Details',
+                                  ),
+                                ],
+                              ),
                             ),
-                            onTap: () => _viewJobDetails(jobId),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     );
                   },
-                ),
+                )
               ],
             ),
           ),
