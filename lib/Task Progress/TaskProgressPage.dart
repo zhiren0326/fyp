@@ -3,14 +3,23 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
+import '../Notification Module/NotificationService.dart';
 
-enum TaskStatus { created, inProgress, completed, paused, blocked }
+enum TaskStatus { created, inProgress, completed, paused, blocked, pendingReview }
 
 class TaskProgressPage extends StatefulWidget {
   final String? taskId;
   final String? taskTitle;
+  final bool isEmployer;
+  final String? applicantId;
 
-  const TaskProgressPage({super.key, this.taskId, this.taskTitle});
+  const TaskProgressPage({
+    super.key,
+    this.taskId,
+    this.taskTitle,
+    this.isEmployer = false,
+    this.applicantId,
+  });
 
   @override
   State<TaskProgressPage> createState() => _TaskProgressPageState();
@@ -22,13 +31,13 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
   String sortBy = 'priority';
   bool isAscending = false;
 
-  final List<String> filterOptions = ['all', 'created', 'inProgress', 'completed', 'blocked', 'paused'];
+  final List<String> filterOptions = ['all', 'created', 'inProgress', 'completed', 'blocked', 'paused', 'pendingReview'];
   final List<String> sortOptions = ['priority', 'progress', 'deadline', 'created'];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
   }
 
   @override
@@ -44,6 +53,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
       case 'completed': return Colors.green;
       case 'paused': return Colors.amber;
       case 'blocked': return Colors.red;
+      case 'pendingreview': return Colors.purple;
       default: return Colors.grey;
     }
   }
@@ -55,6 +65,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
       case 'completed': return 'Completed';
       case 'paused': return 'Paused';
       case 'blocked': return 'Blocked';
+      case 'pendingreview': return 'Pending Review';
       default: return status;
     }
   }
@@ -69,40 +80,101 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
     }
   }
 
-  Future<void> _updateTaskProgress(String taskId, int newProgress) async {
+  Future<void> _updateTaskProgress(String taskId, int newProgress, {String? completionNotes}) async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
+      if (currentUser == null) {
+        _showSnackBar('User not authenticated.');
+        return;
+      }
 
-      // Update in taskProgress collection
+      // Check if user is allowed to edit
+      final taskProgressDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(taskId)
+          .get();
+
+      if (!taskProgressDoc.exists) {
+        _showSnackBar('Task not found.');
+        return;
+      }
+
+      final taskData = taskProgressDoc.data()!;
+      final canEditProgress = List<String>.from(taskData['canEditProgress'] ?? []);
+      if (!canEditProgress.contains(currentUser.uid)) {
+        _showSnackBar('You do not have permission to edit this task.');
+        return;
+      }
+
+      // Prepare update data
+      final updateData = {
+        'currentProgress': newProgress,
+        'lastUpdated': Timestamp.now(),
+        'status': newProgress == 100 ? 'pendingReview' : 'inProgress',
+      };
+
+      if (newProgress == 100) {
+        updateData['completionRequested'] = true;
+        updateData['completionNotes'] = completionNotes ?? '';
+      }
+
+      // Update taskProgress
       await FirebaseFirestore.instance
           .collection('users')
           .doc(currentUser.uid)
           .collection('taskProgress')
           .doc(taskId)
-          .update({
-        'currentProgress': newProgress,
-        'lastUpdated': Timestamp.now(),
-        'status': newProgress == 100 ? 'completed' : 'inProgress',
+          .update(updateData);
+
+      // Update history
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(taskId)
+          .collection('history')
+          .add({
+        'progress': newProgress,
+        'status': newProgress == 100 ? 'pendingReview' : 'inProgress',
+        'notes': newProgress == 100 ? 'Completion requested' : 'Progress updated',
+        'timestamp': Timestamp.now(),
+        'action': newProgress == 100 ? 'completion_requested' : 'progress_updated',
       });
 
-      // Update in jobs collection if it exists
-      final jobDoc = await FirebaseFirestore.instance
-          .collection('jobs')
-          .doc(taskId)
-          .get();
-
+      // Update jobs collection
+      final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(taskId).get();
       if (jobDoc.exists) {
-        await FirebaseFirestore.instance
-            .collection('jobs')
-            .doc(taskId)
-            .update({
+        await FirebaseFirestore.instance.collection('jobs').doc(taskId).update({
           'progressPercentage': newProgress,
-          'isCompleted': newProgress == 100,
+          'isCompleted': newProgress == 100 && taskData['completionApproved'] == true,
         });
+
+        // Notify employer for completion review
+        if (newProgress == 100) {
+          final jobData = jobDoc.data()!;
+          final jobCreatorId = jobData['jobCreator'] ?? jobData['postedBy'];
+          final taskTitle = jobData['jobPosition'] ?? 'Task';
+
+          // Create notification for employer
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(jobCreatorId)
+              .collection('notifications')
+              .add({
+            'message': 'Task "$taskTitle" completion requested by employee. Please review.',
+            'timestamp': FieldValue.serverTimestamp(),
+            'read': false,
+            'type': 'completion_request',
+            'taskId': taskId,
+            'employeeId': currentUser.uid,
+            'completionNotes': completionNotes ?? '',
+          });
+        }
       }
 
-      _showSnackBar('Progress updated successfully!');
+      _showSnackBar(newProgress == 100 ? 'Completion requested! Waiting for employer review.' : 'Progress updated successfully!');
     } catch (e) {
       _showSnackBar('Error updating progress: $e');
     }
@@ -111,7 +183,35 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
   Future<void> _updateTaskStatus(String taskId, String newStatus) async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
+      if (currentUser == null) {
+        _showSnackBar('User not authenticated.');
+        return;
+      }
+
+      if (newStatus == 'completed') {
+        _showSnackBar('Please set progress to 100% to request completion.');
+        return;
+      }
+
+      // Check edit permission
+      final taskProgressDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(taskId)
+          .get();
+
+      if (!taskProgressDoc.exists) {
+        _showSnackBar('Task not found.');
+        return;
+      }
+
+      final taskData = taskProgressDoc.data()!;
+      final canEditProgress = List<String>.from(taskData['canEditProgress'] ?? []);
+      if (!canEditProgress.contains(currentUser.uid)) {
+        _showSnackBar('You do not have permission to edit this task.');
+        return;
+      }
 
       await FirebaseFirestore.instance
           .collection('users')
@@ -123,6 +223,19 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'lastUpdated': Timestamp.now(),
       });
 
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(taskId)
+          .collection('history')
+          .add({
+        'status': newStatus,
+        'notes': 'Status updated to $newStatus',
+        'timestamp': Timestamp.now(),
+        'action': 'status_updated',
+      });
+
       _showSnackBar('Status updated successfully!');
     } catch (e) {
       _showSnackBar('Error updating status: $e');
@@ -132,10 +245,32 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
   Future<void> _addMilestone(String taskId, String milestoneTitle, String description) async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
+      if (currentUser == null) {
+        _showSnackBar('User not authenticated.');
+        return;
+      }
+
+      final taskProgressDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(taskId)
+          .get();
+
+      if (!taskProgressDoc.exists) {
+        _showSnackBar('Task not found.');
+        return;
+      }
+
+      final taskData = taskProgressDoc.data()!;
+      final canEditProgress = List<String>.from(taskData['canEditProgress'] ?? []);
+      if (!canEditProgress.contains(currentUser.uid)) {
+        _showSnackBar('You do not have permission to edit this task.');
+        return;
+      }
 
       final milestone = {
-        'id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'id': (DateTime.now().millisecondsSinceEpoch % 1000000).toString(),
         'title': milestoneTitle,
         'description': description,
         'createdAt': Timestamp.now(),
@@ -152,6 +287,18 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'lastUpdated': Timestamp.now(),
       });
 
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .doc(taskId)
+          .collection('history')
+          .add({
+        'notes': 'Milestone added: $milestoneTitle',
+        'timestamp': Timestamp.now(),
+        'action': 'milestone_added',
+      });
+
       _showSnackBar('Milestone added successfully!');
     } catch (e) {
       _showSnackBar('Error adding milestone: $e');
@@ -160,6 +307,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
 
   void _showProgressUpdateDialog(String taskId, int currentProgress) {
     int newProgress = currentProgress;
+    final completionNotesController = TextEditingController();
 
     showDialog(
       context: context,
@@ -181,20 +329,31 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
                 activeColor: const Color(0xFF006D77),
               ),
               Text('New Progress: $newProgress%', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+              if (newProgress == 100) ...[
+                const SizedBox(height: 16),
+                TextField(
+                  controller: completionNotesController,
+                  decoration: InputDecoration(
+                    labelText: 'Completion Notes (Optional)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  maxLines: 3,
+                ),
+              ],
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
+              child: Text('Cancel', style: GoogleFonts.poppins()),
             ),
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
-                _updateTaskProgress(taskId, newProgress);
+                _updateTaskProgress(taskId, newProgress, completionNotes: completionNotesController.text.trim());
               },
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF006D77)),
-              child: Text('Update', style: GoogleFonts.poppins(color: Colors.white)),
+              child: Text(newProgress == 100 ? 'Request Completion Review' : 'Update Progress', style: GoogleFonts.poppins(color: Colors.white)),
             ),
           ],
         ),
@@ -234,13 +393,15 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text('Cancel', style: GoogleFonts.poppins()),
           ),
           ElevatedButton(
             onPressed: () {
               if (titleController.text.trim().isNotEmpty) {
                 Navigator.pop(context);
                 _addMilestone(taskId, titleController.text.trim(), descriptionController.text.trim());
+              } else {
+                _showSnackBar('Milestone title is required.');
               }
             },
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF006D77)),
@@ -258,7 +419,9 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         title: Text('Update Status', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          children: TaskStatus.values.map((status) {
+          children: TaskStatus.values
+              .where((status) => status != TaskStatus.completed)
+              .map((status) {
             final statusString = status.toString().split('.').last;
             return ListTile(
               title: Text(_getStatusDisplayName(statusString), style: GoogleFonts.poppins()),
@@ -273,6 +436,12 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
             );
           }).toList(),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: GoogleFonts.poppins()),
+          ),
+        ],
       ),
     );
   }
@@ -282,8 +451,304 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
       SnackBar(
         content: Text(message),
         backgroundColor: const Color(0xFF006D77),
-        duration: const Duration(seconds: 2),
+        duration: const Duration(seconds: 3),
       ),
+    );
+  }
+
+  void _viewEmployeeTaskProgress(String jobId, String employeeId, String jobPosition) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => TaskProgressPage(
+          taskId: jobId,
+          taskTitle: jobPosition,
+          isEmployer: true,
+          applicantId: employeeId,
+        ),
+      ),
+    );
+  }
+
+  // Created Tasks Tab - Shows tasks created by current user and their employees' progress
+  Widget _buildCreatedTasksTab() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      return const Center(child: Text('Please log in.'));
+    }
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('jobs')
+          .where('postedBy', isEqualTo: currentUser.uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          print('Error in created tasks StreamBuilder: ${snapshot.error}');
+          return Center(child: Text('Error: ${snapshot.error}', style: GoogleFonts.poppins()));
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: Text('No data available.', style: TextStyle(fontSize: 16)));
+        }
+
+        final jobs = snapshot.data!.docs;
+        print('Found ${jobs.length} created jobs');
+
+        if (jobs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.work_outline, size: 64, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text('No tasks created.', style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600])),
+              ],
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: jobs.length,
+          itemBuilder: (context, index) {
+            final doc = jobs[index];
+            final data = doc.data() as Map<String, dynamic>;
+            final jobId = doc.id;
+            final jobPosition = data['jobPosition'] ?? 'Untitled Job';
+            final acceptedApplicants = data['acceptedApplicants'] as List? ?? [];
+            final postedAt = data['postedAt'] as Timestamp?;
+            final progressPercentage = data['progressPercentage']?.toDouble() ?? 0.0;
+
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 6),
+              elevation: 4,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: ExpansionTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.teal.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(Icons.assignment, color: Colors.teal),
+                ),
+                title: Text(
+                    jobPosition,
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 16)
+                ),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    Text(
+                        'Posted: ${postedAt?.toDate().toString().split('.')[0] ?? 'N/A'}',
+                        style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])
+                    ),
+                    Text(
+                        'Team Members: ${acceptedApplicants.length}',
+                        style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: LinearProgressIndicator(
+                            value: progressPercentage / 100,
+                            backgroundColor: Colors.grey[300],
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                                progressPercentage == 100 ? Colors.green : Colors.orange
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${progressPercentage.toStringAsFixed(0)}%',
+                          style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                children: [
+                  if (acceptedApplicants.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        'No team members assigned yet.',
+                        style: GoogleFonts.poppins(color: Colors.grey[600]),
+                      ),
+                    )
+                  else
+                    ...acceptedApplicants.map<Widget>((employeeId) {
+                      return FutureBuilder<DocumentSnapshot>(
+                        future: FirebaseFirestore.instance.collection('users').doc(employeeId).get(),
+                        builder: (context, userSnapshot) {
+                          if (!userSnapshot.hasData) {
+                            return const SizedBox.shrink();
+                          }
+
+                          final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
+                          final employeeName = userData?['name'] ?? 'Unknown User';
+
+                          return FutureBuilder<DocumentSnapshot>(
+                            future: FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(employeeId)
+                                .collection('taskProgress')
+                                .doc(jobId)
+                                .get(),
+                            builder: (context, taskSnapshot) {
+                              final taskData = taskSnapshot.data?.data() as Map<String, dynamic>?;
+                              final progress = taskData?['currentProgress']?.toDouble() ?? 0.0;
+                              final status = taskData?['status'] ?? 'created';
+                              final lastUpdated = taskData?['lastUpdated'] as Timestamp?;
+
+                              return ListTile(
+                                leading: CircleAvatar(
+                                  backgroundColor: _getStatusColor(status),
+                                  child: Text(
+                                    employeeName.substring(0, 1).toUpperCase(),
+                                    style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                title: Text(employeeName, style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Status: ${_getStatusDisplayName(status)}',
+                                      style: GoogleFonts.poppins(fontSize: 12),
+                                    ),
+                                    if (lastUpdated != null)
+                                      Text(
+                                        'Last updated: ${lastUpdated.toDate().toString().split('.')[0]}',
+                                        style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey[600]),
+                                      ),
+                                  ],
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          '${progress.toStringAsFixed(0)}%',
+                                          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                                        ),
+                                        Container(
+                                          width: 40,
+                                          height: 4,
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey[300],
+                                            borderRadius: BorderRadius.circular(2),
+                                          ),
+                                          child: FractionallySizedBox(
+                                            alignment: Alignment.centerLeft,
+                                            widthFactor: progress / 100,
+                                            child: Container(
+                                              decoration: BoxDecoration(
+                                                color: _getStatusColor(status),
+                                                borderRadius: BorderRadius.circular(2),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      icon: const Icon(Icons.visibility, color: Colors.teal),
+                                      onPressed: () => _viewEmployeeTaskProgress(jobId, employeeId, jobPosition),
+                                      tooltip: 'View Progress Details',
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      );
+                    }).toList(),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Applied Tasks Tab - Shows tasks the current user is working on
+  // Replace the _buildAppliedTasksTab() method with this:
+
+  Widget _buildAppliedTasksTab() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      return Center(child: Text('Please log in.', style: GoogleFonts.poppins()));
+    }
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('taskProgress')
+          .orderBy('lastUpdated', descending: true) // Add explicit ordering
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          print('Error in applied tasks: ${snapshot.error}');
+          return Center(child: Text('Error: ${snapshot.error}', style: GoogleFonts.poppins()));
+        }
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.work_off_outlined, size: 64, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text('No assigned tasks.', style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600])),
+              ],
+            ),
+          );
+        }
+
+        var tasks = snapshot.data!.docs;
+
+        // Apply filter
+        if (selectedFilter != 'all') {
+          tasks = tasks.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return data['status']?.toLowerCase() == selectedFilter;
+          }).toList();
+        }
+
+        return Column(
+          children: [
+            _buildFilterAndSort(),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: tasks.length,
+                itemBuilder: (context, index) {
+                  final taskDoc = tasks[index];
+                  final taskData = taskDoc.data() as Map<String, dynamic>;
+                  final taskId = taskDoc.id;
+                  return _buildTaskCard(taskData, taskId);
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -333,16 +798,18 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
   }
 
   Widget _buildTaskCard(Map<String, dynamic> taskData, String taskId) {
-    final progress = taskData['currentProgress'] ?? 0;
+    final progress = taskData['currentProgress']?.toDouble() ?? 0.0;
     final status = taskData['status'] ?? 'created';
     final priority = taskData['priority'] ?? 'medium';
     final title = taskData['taskTitle'] ?? 'Untitled Task';
     final milestones = (taskData['milestones'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final dependencies = (taskData['dependencies'] as List?)?.cast<String>() ?? [];
     final isBlocked = taskData['isBlocked'] ?? false;
+    final completionRequested = taskData['completionRequested'] ?? false;
+    final completionApproved = taskData['completionApproved'] ?? false;
 
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: const EdgeInsets.symmetric(vertical: 8),
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Column(
@@ -422,9 +889,27 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
                         ),
                       ),
                     ],
+                    if (completionRequested && !completionApproved) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.orange[100],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Pending Review',
+                          style: GoogleFonts.poppins(
+                            color: Colors.orange[700],
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
                     const Spacer(),
                     Text(
-                      'Progress: $progress%',
+                      'Progress: ${progress.toStringAsFixed(1)}%',
                       style: GoogleFonts.poppins(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
@@ -464,9 +949,52 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
                     ],
                   ),
                 ],
+                // Show completion request status
+                if (completionRequested && !completionApproved) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange[200]!),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.pending_actions, size: 16, color: Colors.orange[700]),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Awaiting Employer Review',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.orange[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (taskData['completionNotes'] != null && taskData['completionNotes'].isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Notes: ${taskData['completionNotes']}',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: Colors.orange[600],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
+          // Action buttons
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -475,17 +1003,23 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
                 _buildActionButton(
                   icon: Icons.edit,
                   label: 'Progress',
-                  onPressed: () => _showProgressUpdateDialog(taskId, progress),
+                  onPressed: (completionRequested && !completionApproved)
+                      ? null
+                      : () => _showProgressUpdateDialog(taskId, progress.toInt()),
                 ),
                 _buildActionButton(
                   icon: Icons.flag,
                   label: 'Milestone',
-                  onPressed: () => _showMilestoneDialog(taskId),
+                  onPressed: (completionRequested && !completionApproved)
+                      ? null
+                      : () => _showMilestoneDialog(taskId),
                 ),
                 _buildActionButton(
                   icon: Icons.update,
                   label: 'Status',
-                  onPressed: () => _showStatusUpdateDialog(taskId, status),
+                  onPressed: (completionRequested && !completionApproved)
+                      ? null
+                      : () => _showStatusUpdateDialog(taskId, status),
                 ),
               ],
             ),
@@ -498,8 +1032,9 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
   Widget _buildActionButton({
     required IconData icon,
     required String label,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
   }) {
+    final isDisabled = onPressed == null;
     return InkWell(
       onTap: onPressed,
       borderRadius: BorderRadius.circular(8),
@@ -507,268 +1042,22 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Column(
           children: [
-            Icon(icon, color: const Color(0xFF006D77), size: 20),
+            Icon(
+                icon,
+                color: isDisabled ? Colors.grey[400] : const Color(0xFF006D77),
+                size: 20
+            ),
             const SizedBox(height: 4),
             Text(
               label,
               style: GoogleFonts.poppins(
                 fontSize: 12,
-                color: const Color(0xFF006D77),
+                color: isDisabled ? Colors.grey[400] : const Color(0xFF006D77),
                 fontWeight: FontWeight.w500,
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildTaskList() {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return const Center(child: Text('Please log in.'));
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .collection('taskProgress')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        var tasks = snapshot.data!.docs;
-
-        // Apply filters
-        if (selectedFilter != 'all') {
-          tasks = tasks.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            final status = data['status'] ?? 'created';
-            return status.toLowerCase() == selectedFilter.toLowerCase();
-          }).toList();
-        }
-
-        // Apply sorting
-        tasks.sort((a, b) {
-          final dataA = a.data() as Map<String, dynamic>;
-          final dataB = b.data() as Map<String, dynamic>;
-
-          switch (sortBy) {
-            case 'priority':
-              final priorityOrder = {'low': 1, 'medium': 2, 'high': 3, 'critical': 4};
-              final priorityA = priorityOrder[dataA['priority']?.toLowerCase()] ?? 0;
-              final priorityB = priorityOrder[dataB['priority']?.toLowerCase()] ?? 0;
-              return isAscending ? priorityA.compareTo(priorityB) : priorityB.compareTo(priorityA);
-            case 'progress':
-              final progressA = dataA['currentProgress'] ?? 0;
-              final progressB = dataB['currentProgress'] ?? 0;
-              return isAscending ? progressA.compareTo(progressB) : progressB.compareTo(progressA);
-            case 'created':
-              final createdA = dataA['createdAt'] as Timestamp?;
-              final createdB = dataB['createdAt'] as Timestamp?;
-              if (createdA == null || createdB == null) return 0;
-              return isAscending ? createdA.compareTo(createdB) : createdB.compareTo(createdA);
-            default:
-              return 0;
-          }
-        });
-
-        if (tasks.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.assignment, size: 64, color: Colors.grey[400]),
-                const SizedBox(height: 16),
-                Text(
-                  'No tasks found',
-                  style: GoogleFonts.poppins(
-                    fontSize: 18,
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  selectedFilter == 'all'
-                      ? 'Create your first task to get started!'
-                      : 'No tasks match the selected filter.',
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    color: Colors.grey[500],
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.builder(
-          itemCount: tasks.length,
-          itemBuilder: (context, index) {
-            final taskData = tasks[index].data() as Map<String, dynamic>;
-            final taskId = tasks[index].id;
-            return _buildTaskCard(taskData, taskId);
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildOverviewTab() {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return const Center(child: Text('Please log in.'));
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .collection('taskProgress')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final tasks = snapshot.data!.docs;
-        final totalTasks = tasks.length;
-        final completedTasks = tasks.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return data['status'] == 'completed';
-        }).length;
-        final inProgressTasks = tasks.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return data['status'] == 'inProgress';
-        }).length;
-        final blockedTasks = tasks.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return data['isBlocked'] == true;
-        }).length;
-
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Overview',
-                style: GoogleFonts.poppins(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF006D77),
-                ),
-              ),
-              const SizedBox(height: 20),
-              _buildStatCard('Total Tasks', totalTasks.toString(), Icons.assignment, Colors.blue),
-              _buildStatCard('Completed', completedTasks.toString(), Icons.check_circle, Colors.green),
-              _buildStatCard('In Progress', inProgressTasks.toString(), Icons.hourglass_empty, Colors.orange),
-              _buildStatCard('Blocked', blockedTasks.toString(), Icons.block, Colors.red),
-              const SizedBox(height: 20),
-              if (totalTasks > 0) ...[
-                Text(
-                  'Progress Overview',
-                  style: GoogleFonts.poppins(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF006D77),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.grey.withOpacity(0.1),
-                        blurRadius: 6,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Overall Completion',
-                            style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
-                          ),
-                          Text(
-                            '${((completedTasks / totalTasks) * 100).round()}%',
-                            style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      LinearProgressIndicator(
-                        value: completedTasks / totalTasks,
-                        backgroundColor: Colors.grey[300],
-                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 6,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: color, size: 24),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                Text(
-                  value,
-                  style: GoogleFonts.poppins(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF006D77),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -801,31 +1090,16 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
             labelColor: Colors.white,
             unselectedLabelColor: Colors.white70,
             tabs: const [
-              Tab(text: 'Overview'),
-              Tab(text: 'All Tasks'),
-              Tab(text: 'Analytics'),
+              Tab(text: 'Created Tasks'),
+              Tab(text: 'Applied Tasks'),
             ],
           ),
         ),
         body: TabBarView(
           controller: _tabController,
           children: [
-            _buildOverviewTab(),
-            Column(
-              children: [
-                _buildFilterAndSort(),
-                Expanded(child: _buildTaskList()),
-              ],
-            ),
-            Center(
-              child: Text(
-                'Analytics Coming Soon',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ),
+            _buildCreatedTasksTab(),
+            _buildAppliedTasksTab(),
           ],
         ),
       ),
