@@ -7,9 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fyp/Splah/splash_screen.dart';
 import 'package:fyp/firebase_options.dart';
-import 'package:fyp/module/ActivityLog.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest.dart' as tz;
 
 import 'Notification Module/NotificationService.dart';
 
@@ -20,7 +20,6 @@ bool _allowDataSharing = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService().initialize();
 
   // Initialize Firebase
   try {
@@ -46,6 +45,9 @@ Future<void> main() async {
   seenOnboard = pref.getBool('seenOnboard') ?? false;
   _allowDataSharing = pref.getBool('allowDataSharing') ?? false;
 
+  tz.initializeTimeZones();
+  await NotificationService().initialize();
+
   runApp(MyApp(analytics: analytics));
 }
 
@@ -65,18 +67,6 @@ class MyApp extends StatelessWidget {
     return FirebaseAuth.instance.currentUser?.uid;
   }
 
-  void _initializeNotifications() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser != null) {
-      // Start monitoring tasks and status changes
-      NotificationService().startTaskMonitoring();
-      NotificationService().startStatusMonitoring(currentUser.uid);
-
-      // Schedule daily and weekly summaries
-      NotificationService().scheduleDailySummary();
-      NotificationService().scheduleWeeklySummary();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -89,7 +79,7 @@ class MyApp extends StatelessWidget {
         ),
         primarySwatch: Colors.blue,
       ),
-      home: AuthWrapper(),
+      home: SplashScreen(),
       navigatorObservers: [
         AnalyticsNavigatorObserver(
           analytics: analytics,
@@ -149,31 +139,5 @@ class AnalyticsNavigatorObserver extends NavigatorObserver {
       );
       print('Screen view logged: $screenName');
     }
-  }
-}
-
-class AuthWrapper extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (snapshot.hasData) {
-          // User is logged in, initialize notifications
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            NotificationService().startTaskMonitoring();
-            NotificationService().startStatusMonitoring(snapshot.data!.uid);
-          });
-
-          return SplashScreen();
-        } else {
-          return SplashScreen();
-        }
-      },
-    );
   }
 }

@@ -7,6 +7,7 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:fyp/CalendarPage/DailyPlannerPage.dart';
 import 'package:fyp/CalendarPage/TimeBlockingPage.dart';
 import 'package:fyp/CalendarPage/PomodoroTimerPage.dart';
+import '../Notification Module/NotificationService.dart';
 import '../models/task.dart';
 import '../models/time_block.dart';
 
@@ -35,6 +36,10 @@ class _CalendarPageState extends State<CalendarPage> {
     _selectedDay = _focusedDay;
     _loadTasks();
     _loadTimeBlocks();
+  }
+
+  void _showDailySummary() async {
+    await NotificationService().generateDailySummary();
   }
 
   void _loadTasks() async {

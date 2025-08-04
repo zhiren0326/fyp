@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -185,6 +187,7 @@ class _AddJobPageState extends State<AddJobPage> {
   }
 
   Future<void> _submitJob() async {
+    print('=== _submitJob started ===');
     final currentUser = FirebaseAuth.instance.currentUser;
 
     if (currentUser == null) {
@@ -228,7 +231,12 @@ class _AddJobPageState extends State<AddJobPage> {
 
     try {
       DocumentReference docRef;
+      final jobTitle = controllers['Job position*']?.text ?? 'New Job';
+      print('Job title: $jobTitle');
+
       if (widget.jobId != null) {
+        // Updating existing job
+        print('Updating existing job: ${widget.jobId}');
         docRef = FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
         await docRef.update(jobData);
         _showSnackBar('Job updated successfully!');
@@ -237,9 +245,21 @@ class _AddJobPageState extends State<AddJobPage> {
           await _updateTaskProgress(docRef.id, true);
         }
       } else {
+        // Creating new job
+        print('Creating new job...');
         docRef = await FirebaseFirestore.instance.collection('jobs').add(jobData);
         await docRef.update({'jobId': docRef.id});
+        print('Job created with ID: ${docRef.id}');
+
         _showSnackBar('Job posted successfully!');
+
+        // Create notification in Firestore - this will trigger the listener to send it
+        print('Creating job creation notification in Firestore...');
+        await NotificationService().showJobCreatedNotification(
+          jobId: docRef.id,
+          jobTitle: jobTitle,
+        );
+        print('Job creation notification created in Firestore');
 
         if (isShortTerm) {
           await _createTaskProgress(docRef.id, currentUser.uid);
@@ -250,21 +270,50 @@ class _AddJobPageState extends State<AddJobPage> {
           await _setupRecurringTask(docRef.id, jobData);
         }
 
+        // UPDATED: Schedule deadline notifications only for employees with user preferences
         if (isShortTerm) {
           final endDateTime = _parseDateTime(controllers['End date*']?.text ?? '', controllers['End time*']?.text ?? '');
           if (endDateTime != null) {
-            await NotificationService().scheduleDeadlineReminders(
-              taskId: docRef.id,
-              taskTitle: controllers['Job position*']?.text ?? 'Task',
-              deadline: endDateTime,
-            );
+            print('Scheduling deadline notifications for employees in Firestore...');
+
+            // Get the list of employees who will be assigned to this job
+            // For now, we'll use the acceptedApplicants field, but you might want to
+            // wait until employees are actually assigned
+            final jobDoc = await docRef.get();
+            final jobData = jobDoc.data() as Map<String, dynamic>;
+            final List<String> employeeIds = List<String>.from(jobData['acceptedApplicants'] ?? []);
+
+            // If no employees assigned yet, you might want to store this for later
+            // or handle it when employees are assigned
+            if (employeeIds.isNotEmpty) {
+              await NotificationService().scheduleDeadlineRemindersForEmployees(
+                taskId: docRef.id,
+                taskTitle: jobTitle,
+                deadline: endDateTime,
+                employeeIds: employeeIds,
+                employerUserId: currentUser.uid, // Employer won't get notifications
+              );
+              print('Deadline notifications scheduled for ${employeeIds.length} employees');
+            } else {
+              // Store the deadline info for later when employees are assigned
+              await docRef.update({
+                'pendingDeadlineSetup': {
+                  'deadline': endDateTime.toIso8601String(),
+                  'taskTitle': jobTitle,
+                  'needsDeadlineNotifications': true,
+                }
+              });
+              print('Deadline info stored for later employee assignment');
+            }
           }
         }
       }
 
       await _logActivity(widget.jobId != null ? 'Updated' : 'Created', docRef.id);
+      print('=== _submitJob completed successfully ===');
       Navigator.pop(context, docRef.id);
     } catch (e) {
+      print('Error in _submitJob: $e');
       _showSnackBar('Failed to ${widget.jobId != null ? 'update' : 'post'} job: $e');
     }
   }
@@ -320,6 +369,86 @@ class _AddJobPageState extends State<AddJobPage> {
     return baseData;
   }
 
+  Future<void> setupDeadlineNotificationsForNewEmployees({
+    required String jobId,
+    required List<String> newEmployeeIds,
+  }) async {
+    try {
+      // Get job details
+      final jobDoc = await FirebaseFirestore.instance
+          .collection('jobs')
+          .doc(jobId)
+          .get();
+
+      if (!jobDoc.exists) return;
+
+      final jobData = jobDoc.data() as Map<String, dynamic>;
+      final pendingDeadline = jobData['pendingDeadlineSetup'];
+
+      if (pendingDeadline != null && pendingDeadline['needsDeadlineNotifications'] == true) {
+        final deadline = DateTime.parse(pendingDeadline['deadline']);
+        final taskTitle = pendingDeadline['taskTitle'] ?? 'Task';
+        final employerUserId = jobData['postedBy'];
+
+        print('Setting up deadline notifications for newly assigned employees: $newEmployeeIds');
+
+        await NotificationService().scheduleDeadlineRemindersForEmployees(
+          taskId: jobId,
+          taskTitle: taskTitle,
+          deadline: deadline,
+          employeeIds: newEmployeeIds,
+          employerUserId: employerUserId,
+        );
+
+        // Mark as processed
+        await FirebaseFirestore.instance
+            .collection('jobs')
+            .doc(jobId)
+            .update({
+          'pendingDeadlineSetup.needsDeadlineNotifications': false,
+          'pendingDeadlineSetup.processedAt': FieldValue.serverTimestamp(),
+        });
+
+        print('Deadline notifications set up for ${newEmployeeIds.length} new employees');
+      }
+    } catch (e) {
+      print('Error setting up deadline notifications for new employees: $e');
+    }
+  }
+
+  Future<void> acceptJobApplication(String jobId, String employeeId) async {
+    try {
+      final jobRef = FirebaseFirestore.instance.collection('jobs').doc(jobId);
+
+      // Add employee to accepted applicants
+      await jobRef.update({
+        'acceptedApplicants': FieldValue.arrayUnion([employeeId])
+      });
+
+      // Set up deadline notifications for this new employee
+      await setupDeadlineNotificationsForNewEmployees(
+        jobId: jobId,
+        newEmployeeIds: [employeeId],
+      );
+
+      // Send assignment notification to the employee
+      await NotificationService().sendRealTimeNotification(
+        userId: employeeId,
+        title: '🎉 Job Assignment Confirmed!',
+        body: 'You have been assigned to a new job. Check your tasks for details.',
+        data: {
+          'type': NotificationService.typeTaskAssigned,
+          'jobId': jobId,
+        },
+        priority: NotificationPriority.high,
+      );
+
+      print('Employee $employeeId accepted and notifications set up');
+    } catch (e) {
+      print('Error accepting job application: $e');
+    }
+  }
+
   Future<void> _setupRecurringTask(String jobId, Map<String, dynamic> jobData) async {
     try {
       // Update the job document with recurring information
@@ -331,6 +460,25 @@ class _AddJobPageState extends State<AddJobPage> {
         'recurringInstances': [],
       });
 
+      if (isRecurring) {
+        // Get the job position from the controller
+        final jobPosition = controllers['Job position*']?.text ?? 'Task';
+
+        // Schedule notifications for recurring tasks using Firestore
+        final nextOccurrence = _calculateNextOccurrence();
+        await NotificationService().createFirestoreNotification(
+          userId: FirebaseAuth.instance.currentUser!.uid,
+          title: '🔄 Recurring Task',
+          body: '$jobPosition is scheduled to run again',
+          data: {
+            'type': 'recurring_task',
+            'taskId': jobId,
+          },
+          priority: NotificationPriority.normal,
+          sendImmediately: false,
+          scheduledFor: nextOccurrence,
+        );
+      }
       _showSnackBar('Recurring job setup completed!');
     } catch (e) {
       print('Error setting up recurring task: $e');
@@ -539,6 +687,42 @@ class _AddJobPageState extends State<AddJobPage> {
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  Future<void> _checkFirestoreNotifications() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        _showSnackBar('No authenticated user');
+        return;
+      }
+
+      // Print all notifications in Firestore
+      final notifications = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('notifications')
+          .orderBy('timestamp', descending: true)
+          .limit(10)
+          .get();
+
+      print('=== Firestore Notifications (${notifications.docs.length}) ===');
+      for (var doc in notifications.docs) {
+        final data = doc.data();
+        print('ID: ${doc.id}');
+        print('Title: ${data['title']}');
+        print('Body: ${data['body']}');
+        print('Sent: ${data['sent']}');
+        print('Priority: ${data['priority']}');
+        print('Timestamp: ${data['timestamp']}');
+        print('---');
+      }
+
+      _showSnackBar('Check console for notification details');
+    } catch (e) {
+      print('Error checking Firestore notifications: $e');
+      _showSnackBar('Error: $e');
+    }
   }
 
   // UI Widgets
@@ -1191,6 +1375,7 @@ class _AddJobPageState extends State<AddJobPage> {
             style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w600, color: const Color(0xFF006D77)),
           ),
           actions: [
+            // Debug buttons (remove these in production)
             TextButton(
               onPressed: _submitJob,
               child: Text(
@@ -1213,6 +1398,7 @@ class _AddJobPageState extends State<AddJobPage> {
               Expanded(
                 child: ListView(
                   children: [
+
                     // Basic job information
                     _buildFieldTile('Job position*'),
                     _buildDropdownField('Type of workplace*', workplaceOptions),
@@ -1222,6 +1408,7 @@ class _AddJobPageState extends State<AddJobPage> {
                     _buildFieldTile('Salary (RM)*'),
                     _buildFieldTile('Required Skill*'),
                     _buildFieldTile('Description'),
+
                     // features section
                     Container(
                       margin: const EdgeInsets.symmetric(vertical: 16),
@@ -1251,10 +1438,13 @@ class _AddJobPageState extends State<AddJobPage> {
                       onChanged: (val) => setState(() => isTimeBlocked = val),
                     ),
                     _buildPrioritySelector(),
+
                     // Recurring task section
                     _buildRecurringSection(),
+
                     // dependencies section
                     _buildDependenciesSelector(),
+
                     // Date and time fields
                     Container(
                       margin: const EdgeInsets.symmetric(vertical: 16),
@@ -1272,6 +1462,7 @@ class _AddJobPageState extends State<AddJobPage> {
                     if (isShortTerm) _buildDateTimePicker('End date*', true),
                     if (isShortTerm) _buildDateTimePicker('End time*', false),
                     _buildFieldTile('Required People*'),
+
                     // Summary card
                     if (isRecurring || taskDependencies.isNotEmpty)
                       Container(

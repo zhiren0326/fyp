@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../Notification Module/NotificationService.dart';
 import '../Task Progress/TaskProgressPage.dart';
 
 class ManageApplicantsPage extends StatefulWidget {
@@ -194,22 +195,122 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
         return;
       }
 
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Center(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Accepting applicant and setting up notifications...',
+                    style: GoogleFonts.poppins(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
       // Update the job document
       await jobDocRef.update({
         'applicants': FieldValue.arrayRemove([applicantId]),
         'acceptedApplicants': FieldValue.arrayUnion([applicantId]),
+        'lastUpdated': FieldValue.serverTimestamp(),
       });
 
       // Create task progress for the accepted applicant
       await _createTaskProgressForApplicant(applicantId);
 
-      _showSnackBar('Applicant accepted successfully.');
+      // Send assignment notification to the employee
+      await NotificationService().sendRealTimeNotification(
+        userId: applicantId,
+        title: '🎉 Job Assignment Confirmed!',
+        body: 'Congratulations! You have been assigned to "${widget.jobPosition}". Please check your tasks for details and deadline information.',
+        data: {
+          'type': NotificationService.typeTaskAssigned,
+          'jobId': widget.jobId,
+          'jobTitle': widget.jobPosition,
+          'timestamp': DateTime.now().toIso8601String(),
+        },
+        priority: NotificationPriority.high,
+      );
+
+      // Set up deadline notifications for the employee (NEW FEATURE)
+      await _setupDeadlineNotificationsForEmployee(applicantId, data);
+
+      // Close loading dialog
+      Navigator.of(context).pop();
+
+      _showSnackBar('Applicant accepted successfully. Notifications and deadline reminders have been set up.');
       await _loadTeamPerformanceData(); // Reload data
 
-      print('Applicant $applicantId accepted successfully');
+      print('Applicant $applicantId accepted successfully with deadline notifications');
+
     } catch (e) {
+      // Close loading dialog if it's open
+      if (Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+
       print('Error accepting applicant: $e');
       _showSnackBar('Error accepting applicant: $e');
+    }
+  }
+
+  // NEW METHOD: Set up deadline notifications for the accepted employee
+  Future<void> _setupDeadlineNotificationsForEmployee(String employeeId, Map<String, dynamic> jobData) async {
+    try {
+      final isShortTerm = jobData['isShortTerm'] ?? false;
+
+      // Only set up deadline notifications for short-term jobs
+      if (!isShortTerm) {
+        print('Job is long-term, no deadline notifications needed');
+        return;
+      }
+
+      final endDateStr = jobData['endDate'] as String?;
+      final endTimeStr = jobData['endTime'] as String?;
+
+      if (endDateStr == null || endTimeStr == null) {
+        print('No deadline information found in job data');
+        return;
+      }
+
+      final deadline = _parseDateTime(endDateStr, endTimeStr);
+      if (deadline == null || deadline.isBefore(DateTime.now())) {
+        print('Invalid or past deadline, skipping notification setup');
+        return;
+      }
+
+      final currentUser = FirebaseAuth.instance.currentUser;
+      final employerUserId = currentUser?.uid;
+
+      print('Setting up deadline notifications for employee $employeeId with deadline: $deadline');
+
+      // Use the new notification service method to schedule deadline reminders
+      // This will automatically fetch the user's preferences from Firestore
+      await NotificationService().scheduleDeadlineRemindersForEmployees(
+        taskId: widget.jobId,
+        taskTitle: widget.jobPosition,
+        deadline: deadline,
+        employeeIds: [employeeId], // Only this employee
+        employerUserId: employerUserId, // Employer won't get notifications
+      );
+
+      print('Deadline notifications scheduled successfully for employee $employeeId');
+
+    } catch (e) {
+      print('Error setting up deadline notifications: $e');
+      // Don't show error to user since the main acceptance was successful
+      // Just log the error for debugging
     }
   }
 
@@ -230,10 +331,10 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
         'taskId': widget.jobId,
         'taskTitle': widget.jobPosition,
         'currentProgress': 0.0,
-        'status': 'created',
+        'status': 'assigned', // Changed from 'created' to 'assigned'
         'milestones': [],
         'subTasks': [],
-        'notes': '',
+        'notes': 'Task assigned by employer. Deadline notifications have been set up based on your preferences.',
         'createdAt': Timestamp.now(),
         'lastUpdated': Timestamp.now(),
         'jobCreator': currentUser.uid,
@@ -243,19 +344,208 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
         'completionNotes': '',
         'dependencies': [],
         'isBlocked': false,
+        'deadlineNotificationsEnabled': true, // Track that deadline notifications are active
       });
 
+      // Add to history
       await taskProgressRef.collection('history').add({
         'progress': 0.0,
-        'status': 'created',
-        'notes': 'Task assigned by employer',
+        'status': 'assigned',
+        'notes': 'Task assigned by employer. Deadline notifications configured based on user preferences.',
         'timestamp': Timestamp.now(),
         'action': 'task_assigned',
+        'performedBy': currentUser.uid,
       });
 
       print('Task progress created successfully for $applicantId');
     } catch (e) {
       print('Error creating task progress: $e');
+      rethrow; // Re-throw so the calling method knows there was an error
+    }
+  }
+
+  DateTime? _parseDateTime(String dateStr, String timeStr) {
+    try {
+      if (dateStr.isEmpty || timeStr.isEmpty) return null;
+
+      final dateParts = dateStr.split('-');
+      if (dateParts.length != 3) return null;
+      final timeParts = timeStr.split(':');
+      if (timeParts.length != 2) return null;
+
+      final hour = int.parse(timeParts[0].replaceAll(RegExp(r'[^0-9]'), ''));
+      final minute = int.parse(timeParts[1].replaceAll(RegExp(r'[^0-9]'), ''));
+      final year = int.parse(dateParts[0]);
+      final month = int.parse(dateParts[1]);
+      final day = int.parse(dateParts[2]);
+
+      final period = timeStr.contains('PM') && hour != 12 ? 12 : (timeStr.contains('AM') && hour == 12 ? -12 : 0);
+      final adjustedHour = (hour + period) % 24;
+
+      return DateTime(year, month, day, adjustedHour, minute);
+    } catch (e) {
+      print('Error parsing date-time: $e');
+      return null;
+    }
+  }
+
+  Future<void> _acceptMultipleApplicants(List<String> applicantIds) async {
+    if (applicantIds.isEmpty) return;
+
+    try {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Center(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Accepting ${applicantIds.length} applicants and setting up notifications...',
+                    style: GoogleFonts.poppins(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final jobDocRef = FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
+      final jobDoc = await jobDocRef.get();
+
+      if (!jobDoc.exists) {
+        Navigator.of(context).pop();
+        _showSnackBar('Job not found.');
+        return;
+      }
+
+      final data = jobDoc.data()!;
+      final acceptedApplicants = List<String>.from(data['acceptedApplicants'] ?? []);
+      final requiredPeople = data['requiredPeople'] as int? ?? 1;
+
+      // Filter applicants that can actually be accepted
+      final canAccept = requiredPeople - acceptedApplicants.length;
+      final toAccept = applicantIds.take(canAccept).toList();
+
+      if (toAccept.isEmpty) {
+        Navigator.of(context).pop();
+        _showSnackBar('Cannot accept any more applicants: Job is full.');
+        return;
+      }
+
+      // Update job document
+      await jobDocRef.update({
+        'applicants': FieldValue.arrayRemove(toAccept),
+        'acceptedApplicants': FieldValue.arrayUnion(toAccept),
+        'lastUpdated': FieldValue.serverTimestamp(),
+      });
+
+      // Process each accepted applicant
+      for (String applicantId in toAccept) {
+        // Create task progress
+        await _createTaskProgressForApplicant(applicantId);
+
+        // Send assignment notification
+        await NotificationService().sendRealTimeNotification(
+          userId: applicantId,
+          title: '🎉 Job Assignment Confirmed!',
+          body: 'Congratulations! You have been assigned to "${widget.jobPosition}". Please check your tasks for details.',
+          data: {
+            'type': NotificationService.typeTaskAssigned,
+            'jobId': widget.jobId,
+            'jobTitle': widget.jobPosition,
+            'timestamp': DateTime.now().toIso8601String(),
+          },
+          priority: NotificationPriority.high,
+        );
+
+        // Set up deadline notifications
+        await _setupDeadlineNotificationsForEmployee(applicantId, data);
+      }
+
+      Navigator.of(context).pop(); // Close loading dialog
+
+      final message = toAccept.length == applicantIds.length
+          ? '${toAccept.length} applicants accepted successfully.'
+          : '${toAccept.length} of ${applicantIds.length} applicants accepted (job capacity reached).';
+
+      _showSnackBar(message);
+      await _loadTeamPerformanceData();
+
+    } catch (e) {
+      Navigator.of(context).pop(); // Close loading dialog
+      print('Error accepting multiple applicants: $e');
+      _showSnackBar('Error accepting applicants: $e');
+    }
+  }
+
+  Future<void> _updateJobDeadlineForAllEmployees(DateTime newDeadline) async {
+    try {
+      final jobDocRef = FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
+      final jobDoc = await jobDocRef.get();
+
+      if (!jobDoc.exists) {
+        _showSnackBar('Job not found.');
+        return;
+      }
+
+      final data = jobDoc.data()!;
+      final acceptedApplicants = List<String>.from(data['acceptedApplicants'] ?? []);
+
+      // Update the deadline in the job document
+      final newEndDate = newDeadline.toLocal().toString().split(' ')[0];
+      final newEndTime = '${newDeadline.hour.toString().padLeft(2, '0')}:${newDeadline.minute.toString().padLeft(2, '0')}';
+
+      await jobDocRef.update({
+        'endDate': newEndDate,
+        'endTime': newEndTime,
+        'lastUpdated': FieldValue.serverTimestamp(),
+      });
+
+      // Reschedule deadline notifications for all accepted employees
+      if (acceptedApplicants.isNotEmpty && newDeadline.isAfter(DateTime.now())) {
+        print('Rescheduling deadline notifications for ${acceptedApplicants.length} employees');
+
+        final currentUser = FirebaseAuth.instance.currentUser;
+        await NotificationService().scheduleDeadlineRemindersForEmployees(
+          taskId: widget.jobId,
+          taskTitle: widget.jobPosition,
+          deadline: newDeadline,
+          employeeIds: acceptedApplicants,
+          employerUserId: currentUser?.uid,
+        );
+
+        // Notify employees about the deadline change
+        for (String employeeId in acceptedApplicants) {
+          await NotificationService().sendRealTimeNotification(
+            userId: employeeId,
+            title: '📅 Deadline Updated',
+            body: 'The deadline for "${widget.jobPosition}" has been updated to ${newDeadline.toLocal().toString().split('.')[0]}',
+            data: {
+              'type': NotificationService.typeStatusChanged,
+              'jobId': widget.jobId,
+              'jobTitle': widget.jobPosition,
+              'action': 'deadline_updated',
+              'newDeadline': newDeadline.toIso8601String(),
+              'timestamp': DateTime.now().toIso8601String(),
+            },
+            priority: NotificationPriority.high,
+          );
+        }
+      }
+
+      _showSnackBar('Deadline updated and notifications rescheduled for all employees.');
+      print('Job deadline updated and notifications rescheduled');
+
+    } catch (e) {
+      print('Error updating job deadline: $e');
+      _showSnackBar('Error updating deadline: $e');
     }
   }
 

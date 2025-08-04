@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 
+import '../Notification Module/NotificationService.dart';
+
 enum TaskStatus { created, inProgress, completed, paused, blocked, pendingReview }
 
 class TaskProgressPage extends StatefulWidget {
@@ -238,6 +240,19 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'pointsAwarded': pointsToAward,
         'moneyEarned': jobSalary,
       });
+
+      await NotificationService().sendRealTimeNotification(
+        userId: employeeId,
+        title: '🎉 Task Completed!',
+        body: 'Great work! You earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)}',
+        data: {
+          'type': 'completion_approved',
+          'taskId': taskId,
+          'pointsAwarded': pointsToAward,
+          'moneyEarned': jobSalary,
+        },
+        priority: NotificationPriority.high,
+      );
 
       _showSnackBar('Task completion approved! Employee earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)}');
     } catch (e) {
@@ -574,6 +589,28 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'timestamp': Timestamp.now(),
         'action': 'status_updated',
       });
+
+      if (newStatus == 'blocked') {
+        final jobDoc = await FirebaseFirestore.instance
+            .collection('jobs')
+            .doc(taskId)
+            .get();
+
+        if (jobDoc.exists) {
+          final jobCreatorId = jobDoc.data()!['jobCreator'];
+          await NotificationService().sendRealTimeNotification(
+            userId: jobCreatorId,
+            title: '⚠️ Task Blocked',
+            body: 'Task "${taskData['taskTitle']}" has been blocked and needs attention',
+            data: {
+              'type': 'status_changed',
+              'taskId': taskId,
+              'newStatus': 'blocked',
+            },
+            priority: NotificationPriority.high,
+          );
+        }
+      }
 
       _showSnackBar('Status updated successfully!');
     } catch (e) {
