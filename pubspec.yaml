@@ -80,6 +80,7 @@ dependencies:
   flutter_tts: ^3.8.3
   async: ^2.13.0
   fl_chart: 0.66.0
+  printing: ^5.12.0
   firebase_messaging: ^15.2.10
   device_info_plus: ^11.5.0
 
