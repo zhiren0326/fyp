@@ -10,9 +10,9 @@ import 'package:fyp/firebase_options.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
-
+import 'Notification Module/DailySummaryPage.dart';
 import 'Notification Module/NotificationService.dart';
-
+import 'Notification Module/WeeklySummaryPage.dart';
 
 bool? seenOnboard;
 bool _isFirebaseInitialized = false;
@@ -46,15 +46,20 @@ Future<void> main() async {
   _allowDataSharing = pref.getBool('allowDataSharing') ?? false;
 
   tz.initializeTimeZones();
-  await NotificationService().initialize();
+
+  // Initialize NotificationService but don't await it to avoid blocking app startup
+  NotificationService().initialize().catchError((error) {
+    print('NotificationService initialization failed: $error');
+  });
 
   runApp(MyApp(analytics: analytics));
 }
 
 class MyApp extends StatelessWidget {
   final FirebaseAnalytics analytics;
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-  const MyApp({super.key, required this.analytics});
+  MyApp({super.key, required this.analytics});
 
   // Retrieve allowDataSharing from SharedPreferences
   Future<bool> _getDataSharingAllowed() async {
@@ -67,10 +72,13 @@ class MyApp extends StatelessWidget {
     return FirebaseAuth.instance.currentUser?.uid;
   }
 
-
   @override
   Widget build(BuildContext context) {
+    // Set the navigator key for notifications
+    NotificationService.setNavigatorKey(navigatorKey);
+
     return MaterialApp(
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Job Seeker App',
       theme: ThemeData(
@@ -80,6 +88,11 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blue,
       ),
       home: SplashScreen(),
+      // Add routes for summary pages
+      routes: {
+        '/daily-summary': (context) => const DailySummaryPage(),
+        '/weekly-summary': (context) => const WeeklySummaryPage(),
+      },
       navigatorObservers: [
         AnalyticsNavigatorObserver(
           analytics: analytics,

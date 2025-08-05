@@ -16,7 +16,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
   List<AppNotification> notifications = [];
   bool isLoading = true;
   String selectedFilter = 'All';
-  final List<String> filterOptions = ['All', 'Task', 'Deadline', 'Job', 'System'];
 
   @override
   void initState() {
@@ -194,38 +193,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
   List<AppNotification> _getFilteredNotifications() {
     if (selectedFilter == 'All') return notifications;
     return notifications.where((n) => n.type.toString().split('.').last.toLowerCase() == selectedFilter.toLowerCase()).toList();
-  }
-
-  Widget _buildFilterChips() {
-    return Container(
-      height: 50,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: filterOptions.length,
-        itemBuilder: (context, index) {
-          final option = filterOptions[index];
-          final isSelected = selectedFilter == option;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilterChip(
-              label: Text(option),
-              selected: isSelected,
-              onSelected: (selected) {
-                setState(() {
-                  selectedFilter = option;
-                });
-              },
-              selectedColor: Colors.teal.withOpacity(0.3),
-              labelStyle: GoogleFonts.poppins(
-                color: isSelected ? Colors.teal[800] : Colors.grey[600],
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-              ),
-            ),
-          );
-        },
-      ),
-    );
   }
 
   Widget _buildNotificationItem(AppNotification notification) {
@@ -495,7 +462,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
         ),
         body: Column(
           children: [
-            if (!isLoading) _buildFilterChips(),
             Expanded(
               child: isLoading
                   ? const Center(child: CircularProgressIndicator())

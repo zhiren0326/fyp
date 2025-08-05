@@ -5,6 +5,8 @@ import 'package:fyp/Add%20Job%20Module/EditingJobsPage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fyp/module/ChatMessage.dart';
 
+import '../Notification Module/NotificationService.dart';
+
 // Custom dateOnly function
 DateTime dateOnly(DateTime dateTime) {
   return DateTime(dateTime.year, dateTime.month, dateTime.day);
@@ -107,9 +109,48 @@ class _JobDetailPageState extends State<JobDetailPage> {
 
     setState(() => _isLoading = true);
     try {
+      // Get applicant's name from their profile
+      String applicantName = 'Unknown Applicant';
+      try {
+        final profileDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('profiledetails')
+            .doc('profile')
+            .get();
+
+        if (profileDoc.exists) {
+          applicantName = profileDoc.data()?['name'] ?? 'Unknown Applicant';
+        }
+      } catch (e) {
+        print('Error getting applicant name: $e');
+      }
+
+      // Update job with new applicant
       await FirebaseFirestore.instance.collection('jobs').doc(widget.jobId).update({
         'applicants': FieldValue.arrayUnion([user.uid]),
       });
+
+      // Send notification to employer about the job application
+      final employerId = widget.data['postedBy'] as String?;
+      if (employerId != null && employerId.isNotEmpty) {
+        try {
+          final notificationService = NotificationService();
+          await notificationService.sendJobApplicationNotification(
+            employerId: employerId,
+            applicantId: user.uid,
+            jobId: widget.jobId,
+            jobTitle: widget.data['jobPosition'] ?? 'Job Application',
+            applicantName: applicantName,
+          );
+          print('Job application notification sent to employer: $employerId');
+        } catch (notificationError) {
+          print('Error sending job application notification: $notificationError');
+          // Don't fail the entire application process if notification fails
+        }
+      } else {
+        print('Warning: No employer ID found in job data');
+      }
 
       DateTime now = DateTime.now().toLocal();
       DateTime startDate = widget.data['startDate'] != null
@@ -145,7 +186,16 @@ class _JobDetailPageState extends State<JobDetailPage> {
       }
 
       print('Task saved successfully');
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully applied!')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Successfully applied! The employer has been notified.',
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
       setState(() => _hasApplied = true);
       await Future.delayed(const Duration(milliseconds: 500));
       Navigator.pushReplacement(

@@ -15,7 +15,7 @@ enum NotificationPriority {
   low,
   medium,
   high,
-  critical,
+  critical, urgent,
 }
 
 class AppNotification {

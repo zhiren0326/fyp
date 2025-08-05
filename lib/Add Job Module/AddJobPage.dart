@@ -255,9 +255,12 @@ class _AddJobPageState extends State<AddJobPage> {
 
         // Create notification in Firestore - this will trigger the listener to send it
         print('Creating job creation notification in Firestore...');
-        await NotificationService().showJobCreatedNotification(
+        await NotificationService().showJobCreatedNotificationToAllUsers(
           jobId: docRef.id,
           jobTitle: jobTitle,
+          jobLocation: controllers['Job location*']?.text ?? '',
+          employmentType: controllers['Employment type*']?.text ?? '',
+          salary: double.tryParse(controllers['Salary (RM)*']?.text ?? '0') ?? 0.0,
         );
         print('Job creation notification created in Firestore');
 
@@ -425,11 +428,24 @@ class _AddJobPageState extends State<AddJobPage> {
         'acceptedApplicants': FieldValue.arrayUnion([employeeId])
       });
 
-      // Set up deadline notifications for this new employee
-      await setupDeadlineNotificationsForNewEmployees(
-        jobId: jobId,
-        newEmployeeIds: [employeeId],
-      );
+      // Get job details for deadline notifications
+      final jobDoc = await jobRef.get();
+      final jobData = jobDoc.data() as Map<String, dynamic>;
+
+      // Set up deadline notifications for this new employee with their preferences
+      if (jobData['isShortTerm'] == true && jobData['endDate'] != null && jobData['endTime'] != null) {
+        final endDateTime = _parseDateTime(jobData['endDate'], jobData['endTime']);
+        if (endDateTime != null) {
+          await NotificationService().scheduleDeadlineRemindersForEmployees(
+            taskId: jobId,
+            taskTitle: jobData['jobPosition'] ?? 'Task',
+            deadline: endDateTime,
+            employeeIds: [employeeId],
+            employerUserId: jobData['postedBy'],
+          );
+          print('Deadline notifications scheduled for employee $employeeId');
+        }
+      }
 
       // Send assignment notification to the employee
       await NotificationService().sendRealTimeNotification(
@@ -568,19 +584,6 @@ class _AddJobPageState extends State<AddJobPage> {
         });
       }
     }
-
-    if (isShortTerm && (controllers['End date*']?.text ?? '').isNotEmpty) {
-      final endDate = DateTime.tryParse(controllers['End date*']?.text ?? '');
-      if (endDate != null) {
-        reminders.add({
-          'type': 'deadline_reminder',
-          'reminderDate': endDate.subtract(const Duration(days: 1)).toIso8601String(),
-          'message': 'Task "${controllers['Job position*']?.text ?? 'Task'}" deadline is tomorrow',
-          'sent': false,
-        });
-      }
-    }
-
     return reminders;
   }
 

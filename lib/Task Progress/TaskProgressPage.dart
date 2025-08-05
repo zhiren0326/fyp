@@ -44,7 +44,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
     print('TaskProgressPage - User authenticated: ${user != null}');
     print('TaskProgressPage - User ID: ${user?.uid}');
     if (user != null) {
-      print('TaskProgressPage - User email: ${user.email}');
+      print('TaskProgressPage f- User email: ${user.email}');
     }
   }
 
@@ -225,7 +225,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
       // Check and award badges
       await _checkAndAwardBadges(employeeId);
 
-      // Notify employee
+      // Create notification in Firestore (for app notification history)
       await FirebaseFirestore.instance
           .collection('users')
           .doc(employeeId)
@@ -241,21 +241,26 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'moneyEarned': jobSalary,
       });
 
+      // Send real-time notification to employee
       await NotificationService().sendRealTimeNotification(
         userId: employeeId,
-        title: '🎉 Task Completed!',
-        body: 'Great work! You earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)}',
+        title: '🎉 Task Completed & Approved!',
+        body: 'Congratulations! You earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)} for completing "$jobTitle"',
         data: {
           'type': 'completion_approved',
           'taskId': taskId,
+          'taskTitle': jobTitle,
           'pointsAwarded': pointsToAward,
           'moneyEarned': jobSalary,
+          'timestamp': DateTime.now().toIso8601String(),
         },
         priority: NotificationPriority.high,
       );
 
-      _showSnackBar('Task completion approved! Employee earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)}');
+      _showSnackBar('Task completion approved! Employee notification sent. Employee earned $pointsToAward points and RM${jobSalary.toStringAsFixed(2)}');
+      print('Task approval notification sent to employee: $employeeId');
     } catch (e) {
+      print('Error approving completion: $e');
       _showSnackBar('Error approving completion: $e');
     }
   }
@@ -434,6 +439,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
     };
     return badgeNames[badgeId] ?? badgeId;
   }
+
   Future<void> _updateTaskProgress(String taskId, int newProgress, {String? completionNotes}) async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
@@ -505,19 +511,37 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
           'isCompleted': newProgress == 100 && taskData['completionApproved'] == true,
         });
 
-        // Notify employer for completion review
+        // Enhanced notification for completion review
         if (newProgress == 100) {
           final jobData = jobDoc.data()!;
           final jobCreatorId = jobData['jobCreator'] ?? jobData['postedBy'];
           final taskTitle = jobData['jobPosition'] ?? 'Task';
 
-          // Create notification for employer
+          // Get current user's name
+          final userProfileDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(currentUser.uid)
+              .collection('profiledetails')
+              .doc('profile')
+              .get();
+
+          String userName;
+          if (userProfileDoc.exists) {
+            final data = userProfileDoc.data() as Map<String, dynamic>?;
+            userName = data?['name'] as String? ?? 'Unknown User';
+          } else {
+            userName = 'Unknown User';
+          }
+
+
+
+          // Create notification in Firestore (for app notification history)
           await FirebaseFirestore.instance
               .collection('users')
               .doc(jobCreatorId)
               .collection('notifications')
               .add({
-            'message': 'Task "$taskTitle" completion requested by employee. Please review.',
+            'message': 'Task "$taskTitle" completion requested by $userName. Please review.',
             'timestamp': FieldValue.serverTimestamp(),
             'read': false,
             'type': 'completion_request',
@@ -525,11 +549,24 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
             'employeeId': currentUser.uid,
             'completionNotes': completionNotes ?? '',
           });
+
+          // Send real-time notification using NotificationService
+          await NotificationService().sendCompletionRequestNotification(
+            employerId: jobCreatorId,
+            employeeId: currentUser.uid,
+            employeeName: userName,
+            taskId: taskId,
+            taskTitle: taskTitle,
+            completionNotes: completionNotes ?? '',
+          );
+
+          print('Enhanced completion request notification sent to employer: $jobCreatorId');
         }
       }
 
-      _showSnackBar(newProgress == 100 ? 'Completion requested! Waiting for employer review.' : 'Progress updated successfully!');
+      _showSnackBar(newProgress == 100 ? 'Completion requested! Employer will be notified immediately.' : 'Progress updated successfully!');
     } catch (e) {
+      print('Error updating progress: $e');
       _showSnackBar('Error updating progress: $e');
     }
   }
@@ -689,6 +726,11 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         return;
       }
 
+      // Get task title for notification
+      final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(taskId).get();
+      final taskTitle = jobDoc.exists
+          ? ((jobDoc.data() as Map<String, dynamic>?)?['jobPosition'] ?? 'Task')
+          : 'Task';
       // Update taskProgress in employee's collection
       await FirebaseFirestore.instance
           .collection('users')
@@ -720,7 +762,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'rejectionReason': rejectionReason,
       });
 
-      // Notify employee
+      // Create notification in Firestore (for app notification history)
       await FirebaseFirestore.instance
           .collection('users')
           .doc(employeeId)
@@ -735,8 +777,25 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'rejectionReason': rejectionReason,
       });
 
-      _showSnackBar('Task completion rejected.');
+      // Send real-time notification to employee
+      await NotificationService().sendRealTimeNotification(
+        userId: employeeId,
+        title: '❌ Task Completion Rejected',
+        body: 'Your completion request for "$taskTitle" was rejected. Reason: $rejectionReason',
+        data: {
+          'type': 'completion_rejected',
+          'taskId': taskId,
+          'taskTitle': taskTitle,
+          'rejectionReason': rejectionReason,
+          'timestamp': DateTime.now().toIso8601String(),
+        },
+        priority: NotificationPriority.high,
+      );
+
+      _showSnackBar('Task completion rejected. Employee notification sent.');
+      print('Task rejection notification sent to employee: $employeeId');
     } catch (e) {
+      print('Error rejecting completion: $e');
       _showSnackBar('Error rejecting completion: $e');
     }
   }

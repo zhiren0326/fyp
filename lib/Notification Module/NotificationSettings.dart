@@ -17,8 +17,8 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
   // Settings variables
   int deadlineWarningHours = 24;
-  int secondWarningHours = 2; // NEW: Second warning time
-  bool deadlineNotificationsEnabled = true; // NEW: Toggle for deadline notifications
+  int secondWarningHours = 2;
+  bool deadlineNotificationsEnabled = true;
   bool dailySummaryEnabled = true;
   bool weeklySummaryEnabled = true;
   String dailySummaryTime = '09:00';
@@ -33,6 +33,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   bool milestoneNotifications = true;
 
   bool _isLoading = true;
+  bool _isTesting = false;
 
   @override
   void initState() {
@@ -40,7 +41,8 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     _loadSettings();
   }
 
-  // UPDATED: Load settings from both SharedPreferences and Firestore
+  // ... existing _loadSettings, _saveSettings, etc. methods remain the same ...
+
   Future<void> _loadSettings() async {
     setState(() => _isLoading = true);
 
@@ -48,7 +50,6 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
       final user = FirebaseAuth.instance.currentUser;
 
       if (user != null) {
-        // Try to load from Firestore first
         final firestoreDoc = await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
@@ -75,19 +76,15 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
           });
           print('Settings loaded from Firestore');
         } else {
-          // Fallback to SharedPreferences if Firestore data doesn't exist
           await _loadFromSharedPreferences();
-          // Migrate to Firestore
           await _saveSettings();
           print('Settings migrated from SharedPreferences to Firestore');
         }
       } else {
-        // No user, load from SharedPreferences only
         await _loadFromSharedPreferences();
       }
     } catch (e) {
       print('Error loading settings: $e');
-      // Fallback to SharedPreferences on error
       await _loadFromSharedPreferences();
     } finally {
       setState(() => _isLoading = false);
@@ -113,10 +110,8 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     });
   }
 
-  // UPDATED: Save settings to both SharedPreferences and Firestore
   Future<void> _saveSettings() async {
     try {
-      // Save to SharedPreferences for backup
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('deadline_warning_hours', deadlineWarningHours);
       await prefs.setInt('second_warning_hours', secondWarningHours);
@@ -132,7 +127,6 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
       await prefs.setBool('completion_review_notifications', completionReviewNotifications);
       await prefs.setBool('milestone_notifications', milestoneNotifications);
 
-      // Save to Firestore (primary storage)
       await _notificationService.saveNotificationPreferences(
         deadlineWarningHours: deadlineWarningHours,
         secondWarningHours: secondWarningHours,
@@ -184,6 +178,108 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
       });
     }
   }
+
+  // TEST METHODS
+  Future<void> _runTestSuite() async {
+    setState(() => _isTesting = true);
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('🧪 Running notification test suite...', style: GoogleFonts.poppins()),
+          backgroundColor: const Color(0xFF006D77),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+
+      await _notificationService.runNotificationTestSuite();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ Test suite completed! Check your notifications.', style: GoogleFonts.poppins()),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Test failed: $e', style: GoogleFonts.poppins()),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } finally {
+      setState(() => _isTesting = false);
+    }
+  }
+
+  Future<void> _testUrgentNotification() async {
+    try {
+      await _notificationService.testUrgentNotification();
+      _showTestSnackBar('🚨 Urgent notification sent!');
+    } catch (e) {
+      _showErrorSnackBar('Failed to send urgent notification: $e');
+    }
+  }
+
+  Future<void> _testPriorityLevels() async {
+    try {
+      await _notificationService.testPriorityLevels();
+      _showTestSnackBar('🎨 Priority level test notifications sent! (4 notifications with 3s intervals)');
+    } catch (e) {
+      _showErrorSnackBar('Failed to send priority test: $e');
+    }
+  }
+
+  Future<void> _testDailySummary() async {
+    try {
+      await _notificationService.testDailySummary();
+      _showTestSnackBar('📊 Daily summary test sent!');
+    } catch (e) {
+      _showErrorSnackBar('Failed to send daily summary: $e');
+    }
+  }
+
+  Future<void> _testWeeklySummary() async {
+    try {
+      await _notificationService.testWeeklySummary();
+      _showTestSnackBar('📈 Weekly summary test sent!');
+    } catch (e) {
+      _showErrorSnackBar('Failed to send weekly summary: $e');
+    }
+  }
+
+  Future<void> _testScheduledNotification() async {
+    try {
+      await _notificationService.testScheduledNotification();
+      _showTestSnackBar('⏰ Scheduled notification test created! Will arrive in 30 seconds.');
+    } catch (e) {
+      _showErrorSnackBar('Failed to schedule notification: $e');
+    }
+  }
+
+  void _showTestSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: GoogleFonts.poppins()),
+        backgroundColor: const Color(0xFF006D77),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: GoogleFonts.poppins()),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+
 
   Widget _buildSectionHeader(String title, {String? subtitle}) {
     return Padding(
@@ -361,6 +457,32 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     );
   }
 
+  Widget _buildTestButton({
+    required String title,
+    required VoidCallback onPressed,
+    required IconData icon,
+    Color? color,
+    bool enabled = true,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: ElevatedButton.icon(
+        onPressed: enabled ? onPressed : null,
+        icon: Icon(icon),
+        label: Text(title, style: GoogleFonts.poppins()),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color ?? const Color(0xFF006D77),
+          foregroundColor: Colors.white,
+          minimumSize: const Size(double.infinity, 48),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          elevation: enabled ? 2 : 0,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -447,7 +569,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                 icon: Icons.priority_high,
               ),
 
-              // Deadline Alerts - UPDATED SECTION
+              // Deadline Alerts
               _buildSectionHeader(
                 'Deadline Alerts',
                 subtitle: 'Customize when you receive deadline warnings (employees only)',
@@ -463,7 +585,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                 title: 'Primary Deadline Warning',
                 value: deadlineWarningHours,
                 min: 1,
-                max: 168, // 1 week
+                max: 168,
                 onChanged: (val) => setState(() => deadlineWarningHours = val),
                 format: (val) => val > 24 ? '${(val / 24).toStringAsFixed(1)} days before' : '$val hours before',
                 enabled: deadlineNotificationsEnabled,
@@ -477,31 +599,6 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                 format: (val) => '$val hours before',
                 enabled: deadlineNotificationsEnabled,
               ),
-              if (deadlineNotificationsEnabled)
-                Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  elevation: 1,
-                  color: const Color(0xFF006D77).withOpacity(0.1),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, color: Color(0xFF006D77), size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'You will receive 3 notifications: ${deadlineWarningHours}h before, ${secondWarningHours}h before, and 30 minutes before the deadline.',
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: const Color(0xFF006D77),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
 
               // Summary Notifications
               _buildSectionHeader(
@@ -563,14 +660,68 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                 icon: Icons.flag,
               ),
 
-              // User Role Info
+              // TESTING SECTION
               _buildSectionHeader(
-                'Notification Info',
-                subtitle: 'Understanding your notifications',
+                '🧪 Notification Testing',
+                subtitle: 'Test different notification types and priorities',
               ),
+
+              // Comprehensive Test Suite
+              _buildTestButton(
+                title: _isTesting ? 'Running Test Suite...' : 'Run Complete Test Suite',
+                onPressed: _runTestSuite,
+                icon: _isTesting ? Icons.hourglass_empty : Icons.science,
+                enabled: !_isTesting,
+              ),
+
+              // Individual Tests
+              _buildTestButton(
+                title: 'Test Urgent Notification (Red + Vibration)',
+                onPressed: _testUrgentNotification,
+                icon: Icons.warning,
+                color: Colors.red,
+              ),
+
+              _buildTestButton(
+                title: 'Test Priority Levels (4 notifications)',
+                onPressed: _testPriorityLevels,
+                icon: Icons.layers,
+                color: Colors.orange,
+              ),
+
+              _buildTestButton(
+                title: 'Test Scheduled Notification (30s delay)',
+                onPressed: _testScheduledNotification,
+                icon: Icons.schedule,
+                color: Colors.blue,
+              ),
+
+              // Summary Tests
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildTestButton(
+                      title: 'Test Daily Summary',
+                      onPressed: _testDailySummary,
+                      icon: Icons.today,
+                      color: Colors.green,
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildTestButton(
+                      title: 'Test Weekly Summary',
+                      onPressed: _testWeeklySummary,
+                      icon: Icons.date_range,
+                      color: Colors.purple,
+                    ),
+                  ),
+                ],
+              ),
+
+              // Info Card
               Card(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                elevation: 1,
+                margin: const EdgeInsets.all(16),
+                elevation: 2,
                 color: Colors.blue.withOpacity(0.1),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 child: Padding(
@@ -583,7 +734,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                           const Icon(Icons.info_outline, color: Colors.blue, size: 20),
                           const SizedBox(width: 8),
                           Text(
-                            'Deadline Notifications',
+                            'Notification Priority Guide',
                             style: GoogleFonts.poppins(
                               fontWeight: FontWeight.w600,
                               color: Colors.blue,
@@ -594,88 +745,19 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        '• Employees receive deadline reminders based on their preferences\n'
-                            '• Employers do not receive deadline notifications for jobs they post\n'
-                            '• Each user can customize their own warning times\n'
-                            '• Notifications are automatically scheduled when employees are assigned to jobs',
+                        '🔴 URGENT: Red color, strong vibration, stays until dismissed\n'
+                            '🟡 HIGH: Orange color, medium vibration, heads-up display\n'
+                            '⚪ NORMAL: Default color, standard notification\n'
+                            '🔵 LOW: Minimal styling, no heads-up display\n\n'
+                            '• Summary notifications are sent automatically based on your schedule\n'
+                            '• Deadline reminders are personalized per user\n'
+                            '• Test notifications help you see how each priority looks',
                         style: GoogleFonts.poppins(
                           fontSize: 12,
                           color: Colors.blue.shade700,
                         ),
                       ),
                     ],
-                  ),
-                ),
-              ),
-
-              // Test Notification
-              const SizedBox(height: 24),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: ElevatedButton.icon(
-                  onPressed: () async {
-                    await _notificationService.sendPriorityNotification(
-                      title: '🔔 Test Notification',
-                      body: 'This is a test notification with your current settings!',
-                      taskId: 'test',
-                      priority: 'high',
-                    );
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Test notification sent!', style: GoogleFonts.poppins()),
-                        backgroundColor: const Color(0xFF006D77),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.notifications_active),
-                  label: Text('Send Test Notification', style: GoogleFonts.poppins()),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF006D77),
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 48),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ),
-
-              // Test Deadline Notification
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: OutlinedButton.icon(
-                  onPressed: deadlineNotificationsEnabled ? () async {
-                    // Test deadline notification with user's current settings
-                    final testDeadline = DateTime.now().add(Duration(hours: deadlineWarningHours + 1));
-
-                    await _notificationService.scheduleDeadlineRemindersForEmployees(
-                      taskId: 'test-deadline',
-                      taskTitle: 'Test Deadline Task',
-                      deadline: testDeadline,
-                      employeeIds: [FirebaseAuth.instance.currentUser?.uid ?? ''],
-                    );
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Test deadline notifications scheduled with your current settings!',
-                          style: GoogleFonts.poppins(),
-                        ),
-                        backgroundColor: const Color(0xFF006D77),
-                      ),
-                    );
-                  } : null,
-                  icon: const Icon(Icons.schedule),
-                  label: Text('Test Deadline Settings', style: GoogleFonts.poppins()),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: deadlineNotificationsEnabled ? const Color(0xFF006D77) : Colors.grey,
-                    minimumSize: const Size(double.infinity, 48),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    side: BorderSide(
-                      color: deadlineNotificationsEnabled ? const Color(0xFF006D77) : Colors.grey,
-                    ),
                   ),
                 ),
               ),
