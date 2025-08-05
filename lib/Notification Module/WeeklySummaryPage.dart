@@ -1,9 +1,9 @@
-// Updated WeeklySummaryPage.dart - fetching data from Firebase like ReportScreen
+// Updated WeeklySummaryPage.dart - Using UserDataService for user-specific data
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'UserDataService.dart'; // Import the new service
 
 class WeeklySummaryPage extends StatefulWidget {
   final Map<String, dynamic>? summaryData;
@@ -51,8 +51,11 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
           _currentUserId = currentUser!.uid;
         });
 
+        print('Initialized user: ${currentUser.uid}');
+
         if (widget.summaryData != null) {
           _summaryData = widget.summaryData;
+          _dailyBreakdown = widget.summaryData?['dailyBreakdown'] ?? [];
           setState(() => _isLoading = false);
         } else {
           _loadWeeklySummary();
@@ -72,174 +75,61 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
   }
 
   Future<void> _loadWeeklySummary() async {
-    if (_currentUserId == null) return;
+    if (_currentUserId == null) {
+      print('No current user ID available');
+      setState(() => _isLoading = false);
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
-      final weekEnd = _selectedWeekStart.add(const Duration(days: 7));
+      print('Loading weekly summary for user: $_currentUserId starting $_selectedWeekStart');
 
-      // Get money transactions (completed tasks) for the week
-      final moneySnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_currentUserId)
-          .collection('moneyHistory')
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(_selectedWeekStart))
-          .where('timestamp', isLessThan: Timestamp.fromDate(weekEnd))
-          .orderBy('timestamp', descending: false)
-          .get();
-
-      // Get points earned this week
-      final pointsSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_currentUserId)
-          .collection('pointsHistory')
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(_selectedWeekStart))
-          .where('timestamp', isLessThan: Timestamp.fromDate(weekEnd))
-          .orderBy('timestamp', descending: false)
-          .get();
-
-      // Get translations for the week
-      final translationsSnapshot = await FirebaseFirestore.instance
-          .collection('translations')
-          .where('userId', isEqualTo: _currentUserId)
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(_selectedWeekStart))
-          .where('timestamp', isLessThan: Timestamp.fromDate(weekEnd))
-          .get();
-
-      // Process money transactions (tasks)
-      int totalTasks = moneySnapshot.docs.length;
-      int completedTasks = totalTasks; // All tasks in money history are completed
-      double totalEarnings = 0.0;
-      Map<String, int> tasksByCategory = {};
-
-      for (var doc in moneySnapshot.docs) {
-        final data = doc.data();
-        final amount = ((data['amount'] ?? 0) as num).toDouble();
-        final taskTitle = data['taskTitle'] ?? data['description'] ?? 'Task Completed';
-
-        totalEarnings += amount;
-
-        final category = _categorizeTask(taskTitle);
-        tasksByCategory[category] = (tasksByCategory[category] ?? 0) + 1;
-      }
-
-      // Process points - Fixed type conversion error
-      int totalPoints = 0;
-      for (var doc in pointsSnapshot.docs) {
-        final data = doc.data();
-        final points = ((data['points'] ?? 0) as num).toInt(); // Fixed: Convert num to int
-        totalPoints += points;
-      }
-
-      // Calculate daily breakdown
-      List<Map<String, dynamic>> dailyBreakdown = [];
-      for (int i = 0; i < 7; i++) {
-        final currentDay = _selectedWeekStart.add(Duration(days: i));
-        final dayStart = DateTime(currentDay.year, currentDay.month, currentDay.day);
-        final dayEnd = dayStart.add(const Duration(days: 1));
-
-        final dayTasks = moneySnapshot.docs.where((doc) {
-          final timestamp = (doc.data()['timestamp'] as Timestamp).toDate();
-          return timestamp.isAfter(dayStart.subtract(const Duration(seconds: 1))) &&
-              timestamp.isBefore(dayEnd);
-        }).toList();
-
-        final dayPoints = pointsSnapshot.docs.where((doc) {
-          final timestamp = (doc.data()['timestamp'] as Timestamp).toDate();
-          return timestamp.isAfter(dayStart.subtract(const Duration(seconds: 1))) &&
-              timestamp.isBefore(dayEnd);
-        }).fold(0, (sum, doc) {
-          final points = ((doc.data()['points'] ?? 0) as num).toInt();
-          return sum + points;
+      // Check if user has any data
+      final hasData = await UserDataService.userHasData(_currentUserId!);
+      if (!hasData) {
+        print('User has no data available');
+        setState(() {
+          _summaryData = null;
+          _dailyBreakdown = [];
+          _isLoading = false;
         });
-
-        final dayEarnings = dayTasks.fold(0.0, (sum, doc) {
-          final amount = ((doc.data()['amount'] ?? 0) as num).toDouble();
-          return sum + amount;
-        });
-
-        final dayTranslations = translationsSnapshot.docs.where((doc) {
-          final timestamp = (doc.data()['timestamp'] as Timestamp).toDate();
-          return timestamp.isAfter(dayStart.subtract(const Duration(seconds: 1))) &&
-              timestamp.isBefore(dayEnd);
-        }).length;
-
-        dailyBreakdown.add({
-          'date': currentDay,
-          'dayName': _getDayName(currentDay.weekday),
-          'totalTasks': dayTasks.length,
-          'completedTasks': dayTasks.length,
-          'points': dayPoints,
-          'earnings': dayEarnings,
-          'translations': dayTranslations,
-          'completionRate': dayTasks.isNotEmpty ? 100.0 : 0.0,
-        });
+        return;
       }
 
-      // Calculate averages
-      double averageDailyCompletion = dailyBreakdown.isNotEmpty
-          ? dailyBreakdown.map((day) => day['completionRate'] as double).reduce((a, b) => a + b) / 7
-          : 0.0;
-
-      double averageDailyEarnings = dailyBreakdown.isNotEmpty
-          ? dailyBreakdown.map((day) => day['earnings'] as double).reduce((a, b) => a + b) / 7
-          : 0.0;
-
-      int mostProductiveDayIndex = -1;
-      if (dailyBreakdown.isNotEmpty) {
-        double maxRate = dailyBreakdown.map((d) => d['completionRate'] as double).reduce((a, b) => a > b ? a : b);
-        mostProductiveDayIndex = dailyBreakdown.indexWhere((day) => day['completionRate'] == maxRate);
-      }
+      // Use the new service to generate user-specific summary
+      final summaryData = await UserDataService.generateWeeklySummaryForUser(
+        userId: _currentUserId!,
+        weekStart: _selectedWeekStart,
+      );
 
       setState(() {
-        _summaryData = {
-          'weekStart': _selectedWeekStart.toIso8601String(),
-          'weekEnd': weekEnd.toIso8601String(),
-          'totalTasks': totalTasks,
-          'completedTasks': completedTasks,
-          'inProgressTasks': 0,
-          'pendingTasks': 0,
-          'overdueTasks': 0,
-          'totalPoints': totalPoints,
-          'totalEarnings': totalEarnings,
-          'translationsCount': translationsSnapshot.docs.length,
-          'completionRate': totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0.0,
-          'tasksByCategory': tasksByCategory,
-          'averageDailyCompletion': averageDailyCompletion,
-          'averageDailyEarnings': averageDailyEarnings,
-          'mostProductiveDay': mostProductiveDayIndex >= 0 ? dailyBreakdown[mostProductiveDayIndex]['dayName'] : 'N/A',
-        };
-        _dailyBreakdown = dailyBreakdown;
+        _summaryData = summaryData;
+        _dailyBreakdown = summaryData['dailyBreakdown'] as List<Map<String, dynamic>>? ?? [];
         _isLoading = false;
       });
 
+      print('Weekly summary loaded successfully: ${summaryData['totalTasks']} tasks, ${summaryData['totalPoints']} points');
+
     } catch (e) {
       print('Error loading weekly summary: $e');
-      setState(() => _isLoading = false);
-    }
-  }
+      setState(() {
+        _summaryData = null;
+        _dailyBreakdown = [];
+        _isLoading = false;
+      });
 
-  String _categorizeTask(String taskTitle) {
-    taskTitle = taskTitle.toLowerCase();
-    if (taskTitle.contains('translation') || taskTitle.contains('translate')) {
-      return 'Translation';
-    } else if (taskTitle.contains('coding') || taskTitle.contains('programming') ||
-        taskTitle.contains('development')) {
-      return 'Development';
-    } else if (taskTitle.contains('design') || taskTitle.contains('creative')) {
-      return 'Design';
-    } else if (taskTitle.contains('research') || taskTitle.contains('analysis')) {
-      return 'Research';
-    } else if (taskTitle.contains('writing') || taskTitle.contains('content')) {
-      return 'Writing';
+      // Show error to user
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading weekly summary: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
-    return 'General';
-  }
-
-  String _getDayName(int weekday) {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    return days[(weekday - 1) % 7];
   }
 
   Future<void> _selectWeek() async {
@@ -398,10 +288,11 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                         showTitles: true,
                         getTitlesWidget: (value, meta) {
                           if (value.toInt() >= 0 && value.toInt() < _dailyBreakdown.length) {
+                            final dayName = _dailyBreakdown[value.toInt()]['dayName'] as String? ?? '';
                             return Padding(
                               padding: const EdgeInsets.only(top: 8),
                               child: Text(
-                                _dailyBreakdown[value.toInt()]['dayName'].substring(0, 3),
+                                dayName.length >= 3 ? dayName.substring(0, 3) : dayName,
                                 style: GoogleFonts.poppins(fontSize: 10),
                               ),
                             );
@@ -419,10 +310,10 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                   minY: 0,
                   maxY: 100,
                   lineBarsData: [
-                    // Completion Rate Line
                     LineChartBarData(
                       spots: _dailyBreakdown.asMap().entries.map((entry) {
-                        return FlSpot(entry.key.toDouble(), entry.value['completionRate']);
+                        final completionRate = entry.value['completionRate'] as double? ?? 0.0;
+                        return FlSpot(entry.key.toDouble(), completionRate);
                       }).toList(),
                       isCurved: true,
                       color: const Color(0xFF006D77),
@@ -486,10 +377,11 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                         showTitles: true,
                         getTitlesWidget: (value, meta) {
                           if (value.toInt() >= 0 && value.toInt() < _dailyBreakdown.length) {
+                            final dayName = _dailyBreakdown[value.toInt()]['dayName'] as String? ?? '';
                             return Padding(
                               padding: const EdgeInsets.only(top: 8),
                               child: Text(
-                                _dailyBreakdown[value.toInt()]['dayName'].substring(0, 3),
+                                dayName.length >= 3 ? dayName.substring(0, 3) : dayName,
                                 style: GoogleFonts.poppins(fontSize: 10),
                               ),
                             );
@@ -503,11 +395,12 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                   ),
                   borderData: FlBorderData(show: false),
                   barGroups: _dailyBreakdown.asMap().entries.map((entry) {
+                    final points = entry.value['points'] as int? ?? 0;
                     return BarChartGroupData(
                       x: entry.key,
                       barRods: [
                         BarChartRodData(
-                          toY: (entry.value['points'] as int).toDouble(),
+                          toY: points.toDouble(),
                           color: Colors.amber[700],
                           width: 20,
                           borderRadius: const BorderRadius.only(
@@ -570,10 +463,11 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                         showTitles: true,
                         getTitlesWidget: (value, meta) {
                           if (value.toInt() >= 0 && value.toInt() < _dailyBreakdown.length) {
+                            final dayName = _dailyBreakdown[value.toInt()]['dayName'] as String? ?? '';
                             return Padding(
                               padding: const EdgeInsets.only(top: 8),
                               child: Text(
-                                _dailyBreakdown[value.toInt()]['dayName'].substring(0, 3),
+                                dayName.length >= 3 ? dayName.substring(0, 3) : dayName,
                                 style: GoogleFonts.poppins(fontSize: 10),
                               ),
                             );
@@ -587,11 +481,12 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                   ),
                   borderData: FlBorderData(show: false),
                   barGroups: _dailyBreakdown.asMap().entries.map((entry) {
+                    final earnings = entry.value['earnings'] as double? ?? 0.0;
                     return BarChartGroupData(
                       x: entry.key,
                       barRods: [
                         BarChartRodData(
-                          toY: entry.value['earnings'] as double,
+                          toY: earnings,
                           color: Colors.green[600],
                           width: 20,
                           borderRadius: const BorderRadius.only(
@@ -639,17 +534,17 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
   }
 
   Widget _buildDayItem(Map<String, dynamic> day) {
-    final date = day['date'] as DateTime;
+    final date = day['date'] as DateTime? ?? DateTime.now();
     final isToday = date.day == DateTime.now().day &&
         date.month == DateTime.now().month &&
         date.year == DateTime.now().year;
 
-    final completedTasks = (day['completedTasks'] as int?) ?? 0;
-    final totalTasks = (day['totalTasks'] as int?) ?? 0;
-    final points = (day['points'] as int?) ?? 0;
-    final earnings = (day['earnings'] as double?) ?? 0.0;
-    final translations = (day['translations'] as int?) ?? 0;
-    final completionRate = (day['completionRate'] as double?) ?? 0.0;
+    final completedTasks = day['completedTasks'] as int? ?? 0;
+    final totalTasks = day['totalTasks'] as int? ?? 0;
+    final points = day['points'] as int? ?? 0;
+    final earnings = day['earnings'] as double? ?? 0.0;
+    final translations = day['translations'] as int? ?? 0;
+    final completionRate = day['completionRate'] as double? ?? 0.0;
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -756,14 +651,13 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
   Widget _buildInsightsCard() {
     if (_summaryData == null) return const SizedBox.shrink();
 
-    // Use null-safe casting with default values
-    final completionRate = (_summaryData!['completionRate'] as double?) ?? 0.0;
-    final averageDailyCompletion = (_summaryData!['averageDailyCompletion'] as double?) ?? 0.0;
-    final averageDailyEarnings = (_summaryData!['averageDailyEarnings'] as double?) ?? 0.0;
-    final mostProductiveDay = (_summaryData!['mostProductiveDay'] as String?) ?? 'N/A';
-    final totalPoints = (_summaryData!['totalPoints'] as int?) ?? 0;
-    final totalEarnings = (_summaryData!['totalEarnings'] as double?) ?? 0.0;
-    final translationsCount = (_summaryData!['translationsCount'] as int?) ?? 0;
+    final completionRate = _summaryData!['completionRate'] as double? ?? 0.0;
+    final averageDailyCompletion = _summaryData!['averageDailyCompletion'] as double? ?? 0.0;
+    final averageDailyEarnings = _summaryData!['averageDailyEarnings'] as double? ?? 0.0;
+    final mostProductiveDay = _summaryData!['mostProductiveDay'] as String? ?? 'N/A';
+    final totalPoints = _summaryData!['totalPoints'] as int? ?? 0;
+    final totalEarnings = _summaryData!['totalEarnings'] as double? ?? 0.0;
+    final translationsCount = _summaryData!['translationsCount'] as int? ?? 0;
 
     String performanceEmoji = completionRate >= 90 ? '🏆' :
     completionRate >= 70 ? '🌟' :
@@ -860,11 +754,13 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
   }
 
   Widget _buildCategoryBreakdown() {
-    if (_summaryData == null || (_summaryData!['tasksByCategory'] as Map).isEmpty) {
+    if (_summaryData == null) return const SizedBox.shrink();
+
+    final tasksByCategory = _summaryData!['tasksByCategory'] as Map<String, int>? ?? <String, int>{};
+
+    if (tasksByCategory.isEmpty) {
       return const SizedBox.shrink();
     }
-
-    final categories = _summaryData!['tasksByCategory'] as Map<String, int>;
 
     return Card(
       elevation: 2,
@@ -883,7 +779,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
               ),
             ),
             const SizedBox(height: 16),
-            ...categories.entries.map((entry) => _buildCategoryItem(entry.key, entry.value)),
+            ...tasksByCategory.entries.map((entry) => _buildCategoryItem(entry.key, entry.value)),
           ],
         ),
       ),
@@ -967,6 +863,12 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
               onPressed: _selectWeek,
               tooltip: 'Select Week',
             ),
+            if (_currentUserId != null)
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _loadWeeklySummary,
+                tooltip: 'Refresh Data',
+              ),
           ],
         ),
         body: _isLoading
@@ -980,6 +882,31 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // User Info Card
+              if (_currentUserId != null)
+                Card(
+                  elevation: 1,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.person, color: Colors.grey[600], size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'User: ${_currentUserId!.substring(0, 8)}...',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: 16),
+
               // Week Header
               Card(
                 elevation: 2,
@@ -1009,7 +936,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                       const SizedBox(height: 8),
                       if (_summaryData != null) ...[
                         Text(
-                          'Overall Completion: ${((_summaryData!['completionRate'] as double?) ?? 0.0).toStringAsFixed(1)}%',
+                          'Overall Completion: ${(_summaryData!['completionRate'] as double? ?? 0.0).toStringAsFixed(1)}%',
                           style: GoogleFonts.poppins(
                             fontSize: 14,
                             color: Colors.white.withOpacity(0.9),
@@ -1017,7 +944,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                         ),
                         const SizedBox(height: 8),
                         LinearProgressIndicator(
-                          value: ((_summaryData!['completionRate'] as double?) ?? 0.0) / 100,
+                          value: (_summaryData!['completionRate'] as double? ?? 0.0) / 100,
                           backgroundColor: Colors.white.withOpacity(0.3),
                           valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
                         ),
@@ -1050,7 +977,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                       value: (_summaryData!['completedTasks'] as int? ?? 0).toString(),
                       icon: Icons.check_circle,
                       color: Colors.green,
-                      progress: (_summaryData!['completionRate'] as double?) ?? 0.0,
+                      progress: (_summaryData!['completionRate'] as double? ?? 0.0),
                     ),
                     _buildStatCard(
                       title: 'Total Points',
@@ -1060,7 +987,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                     ),
                     _buildStatCard(
                       title: 'Total Earnings',
-                      value: 'RM${((_summaryData!['totalEarnings'] as double?) ?? 0.0).toStringAsFixed(0)}',
+                      value: 'RM${(_summaryData!['totalEarnings'] as double? ?? 0.0).toStringAsFixed(0)}',
                       icon: Icons.attach_money,
                       color: Colors.green[600]!,
                     ),
@@ -1111,6 +1038,17 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                           style: GoogleFonts.poppins(
                             fontSize: 16,
                             color: Colors.grey[600],
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _currentUserId != null
+                              ? 'User: ${_currentUserId!.substring(0, 8)}...'
+                              : 'No user logged in',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey[500],
                           ),
                           textAlign: TextAlign.center,
                         ),

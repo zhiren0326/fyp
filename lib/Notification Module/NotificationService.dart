@@ -1258,11 +1258,18 @@ class NotificationService {
     try {
       final summaryData = {
         'date': data['date'],
-        'totalJobs': data['totalJobs'] ?? data['totalTasks'] ?? 0,
-        'completedJobs': data['completedJobs'] ?? data['completedTasks'] ?? 0,
-        'inProgressJobs': data['inProgressJobs'] ?? data['inProgressTasks'] ?? 0,
-        'pendingJobs': data['pendingJobs'] ?? data['overdueTasks'] ?? 0,
+        'totalTasks': data['totalJobs'] ?? data['totalTasks'] ?? 0,
+        'completedTasks': data['completedJobs'] ?? data['completedTasks'] ?? 0,
+        'inProgressTasks': data['inProgressJobs'] ?? data['inProgressTasks'] ?? 0,
+        'pendingTasks': data['pendingJobs'] ?? data['overdueTasks'] ?? 0,
         'pointsEarned': data['pointsEarned'] ?? 0,
+        'totalEarnings': 0.0,
+        'translationsCount': 0,
+        'taskDetails': <Map<String, dynamic>>[],
+        'pointTransactions': <Map<String, dynamic>>[],
+        'translationDetails': <Map<String, dynamic>>[],
+        'tasksByCategory': <String, int>{},
+        'completionRate': 100.0,
         'isFromNotification': true,
       };
 
@@ -1290,10 +1297,19 @@ class NotificationService {
       final summaryData = {
         'weekStart': data['weekStart'],
         'weekEnd': data['weekEnd'],
-        'totalJobs': data['totalJobs'] ?? data['totalTasks'] ?? 0,
-        'completedJobs': data['completedJobs'] ?? data['completedTasks'] ?? 0,
-        'pointsEarned': data['pointsEarned'] ?? 0,
+        'totalTasks': data['totalJobs'] ?? data['totalTasks'] ?? 0,
+        'completedTasks': data['completedJobs'] ?? data['completedTasks'] ?? 0,
+        'inProgressTasks': 0,
+        'pendingTasks': 0,
+        'overdueTasks': 0,
+        'totalPoints': data['pointsEarned'] ?? 0,
+        'totalEarnings': 0.0,
+        'translationsCount': 0,
         'completionRate': data['completionRate'] ?? 0.0,
+        'tasksByCategory': <String, int>{},
+        'averageDailyCompletion': 0.0,
+        'averageDailyEarnings': 0.0,
+        'mostProductiveDay': 'N/A',
         'isFromNotification': true,
       };
 

@@ -1,9 +1,9 @@
-// Updated DailySummaryPage.dart - fetching data from Firebase like ReportScreen
+// Updated DailySummaryPage.dart - Using UserDataService for user-specific data
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'UserDataService.dart'; // Import the new service
 
 class DailySummaryPage extends StatefulWidget {
   final Map<String, dynamic>? summaryData;
@@ -46,6 +46,8 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
           _currentUserId = currentUser!.uid;
         });
 
+        print('Initialized user: ${currentUser.uid}');
+
         if (widget.summaryData != null) {
           _summaryData = widget.summaryData;
           setState(() => _isLoading = false);
@@ -62,156 +64,59 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
   }
 
   Future<void> _loadDailySummary() async {
-    if (_currentUserId == null) return;
+    if (_currentUserId == null) {
+      print('No current user ID available');
+      setState(() => _isLoading = false);
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
       final selectedDateTime = DateTime.parse(_selectedDate);
-      final dayStart = DateTime(selectedDateTime.year, selectedDateTime.month, selectedDateTime.day);
-      final dayEnd = dayStart.add(const Duration(days: 1));
+      print('Loading daily summary for user: $_currentUserId on date: $_selectedDate');
 
-      // Get money transactions (completed tasks) for the selected day
-      final moneySnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_currentUserId)
-          .collection('moneyHistory')
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(dayStart))
-          .where('timestamp', isLessThan: Timestamp.fromDate(dayEnd))
-          .orderBy('timestamp', descending: false)
-          .get();
-
-      // Get points earned on this day
-      final pointsSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_currentUserId)
-          .collection('pointsHistory')
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(dayStart))
-          .where('timestamp', isLessThan: Timestamp.fromDate(dayEnd))
-          .orderBy('timestamp', descending: false)
-          .get();
-
-      // Get translation data for the day
-      final translationsSnapshot = await FirebaseFirestore.instance
-          .collection('translations')
-          .where('userId', isEqualTo: _currentUserId)
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(dayStart))
-          .where('timestamp', isLessThan: Timestamp.fromDate(dayEnd))
-          .get();
-
-      // Process money history (tasks)
-      List<Map<String, dynamic>> taskDetails = [];
-      double totalEarnings = 0.0;
-      int completedTasks = 0;
-      Map<String, int> tasksByCategory = {};
-
-      for (var doc in moneySnapshot.docs) {
-        final data = doc.data();
-        final amount = ((data['amount'] ?? 0) as num).toDouble();
-        final taskTitle = data['taskTitle'] ?? data['description'] ?? 'Task Completed';
-        final timestamp = data['timestamp'] as Timestamp?;
-        final source = data['source'] ?? 'task_completion';
-
-        final category = _categorizeTask(taskTitle);
-        tasksByCategory[category] = (tasksByCategory[category] ?? 0) + 1;
-
-        taskDetails.add({
-          'title': taskTitle,
-          'status': 'Completed',
-          'progress': 100.0,
-          'earnings': amount,
-          'time': timestamp?.toDate() ?? DateTime.now(),
-          'category': category,
-          'source': source,
+      // Check if user has any data
+      final hasData = await UserDataService.userHasData(_currentUserId!);
+      if (!hasData) {
+        print('User has no data available');
+        setState(() {
+          _summaryData = null;
+          _isLoading = false;
         });
-
-        totalEarnings += amount;
-        completedTasks++;
+        return;
       }
 
-      // Process points - Fixed the type conversion error
-      int pointsEarned = 0;
-      List<Map<String, dynamic>> pointTransactions = [];
-
-      for (var doc in pointsSnapshot.docs) {
-        final data = doc.data();
-        final points = ((data['points'] ?? 0) as num).toInt(); // Fixed: Convert num to int
-        final description = data['description'] ?? '';
-        final timestamp = data['timestamp'] as Timestamp?;
-
-        pointsEarned += points;
-        pointTransactions.add({
-          'points': points,
-          'description': description,
-          'timestamp': timestamp?.toDate() ?? DateTime.now(),
-        });
-      }
-
-      // Process translations
-      int translationsCount = translationsSnapshot.docs.length;
-      int totalCharacters = 0;
-      List<Map<String, dynamic>> translationDetails = [];
-
-      for (var doc in translationsSnapshot.docs) {
-        final data = doc.data();
-        final originalText = (data['originalText'] ?? '') as String;
-        final translatedText = (data['translatedText'] ?? '') as String;
-        final fromLang = (data['fromLanguage'] ?? 'Unknown') as String;
-        final toLang = (data['toLanguage'] ?? 'Unknown') as String;
-        final timestamp = data['timestamp'] as Timestamp?;
-
-        totalCharacters += originalText.length;
-        translationDetails.add({
-          'originalText': originalText,
-          'translatedText': translatedText,
-          'fromLanguage': fromLang,
-          'toLanguage': toLang,
-          'characters': originalText.length,
-          'timestamp': timestamp?.toDate() ?? DateTime.now(),
-        });
-      }
+      // Use the new service to generate user-specific summary
+      final summaryData = await UserDataService.generateDailySummaryForUser(
+        userId: _currentUserId!,
+        date: selectedDateTime,
+      );
 
       setState(() {
-        _summaryData = {
-          'date': selectedDateTime.toIso8601String(),
-          'totalTasks': completedTasks,
-          'completedTasks': completedTasks,
-          'inProgressTasks': 0, // All tasks in money history are completed
-          'pendingTasks': 0,
-          'pointsEarned': pointsEarned,
-          'totalEarnings': totalEarnings,
-          'translationsCount': translationsCount,
-          'totalCharacters': totalCharacters,
-          'taskDetails': taskDetails,
-          'pointTransactions': pointTransactions,
-          'translationDetails': translationDetails,
-          'tasksByCategory': tasksByCategory,
-          'completionRate': completedTasks > 0 ? 100.0 : 0.0, // All tracked tasks are completed
-        };
+        _summaryData = summaryData;
         _isLoading = false;
       });
 
+      print('Daily summary loaded successfully: ${summaryData['totalTasks']} tasks, ${summaryData['pointsEarned']} points');
+
     } catch (e) {
       print('Error loading daily summary: $e');
-      setState(() => _isLoading = false);
-    }
-  }
+      setState(() {
+        _summaryData = null;
+        _isLoading = false;
+      });
 
-  String _categorizeTask(String taskTitle) {
-    taskTitle = taskTitle.toLowerCase();
-    if (taskTitle.contains('translation') || taskTitle.contains('translate')) {
-      return 'Translation';
-    } else if (taskTitle.contains('coding') || taskTitle.contains('programming') ||
-        taskTitle.contains('development')) {
-      return 'Development';
-    } else if (taskTitle.contains('design') || taskTitle.contains('creative')) {
-      return 'Design';
-    } else if (taskTitle.contains('research') || taskTitle.contains('analysis')) {
-      return 'Research';
-    } else if (taskTitle.contains('writing') || taskTitle.contains('content')) {
-      return 'Writing';
+      // Show error to user
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading daily summary: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
-    return 'General';
   }
 
   Future<void> _selectDate() async {
@@ -316,6 +221,13 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
   Widget _buildActivityOverview() {
     if (_summaryData == null) return const SizedBox.shrink();
 
+    final totalTasks = _summaryData!['totalTasks'] as int? ?? 0;
+    final pointsEarned = _summaryData!['pointsEarned'] as int? ?? 0;
+    final translationsCount = _summaryData!['translationsCount'] as int? ?? 0;
+    final totalEarnings = _summaryData!['totalEarnings'] as double? ?? 0.0;
+    final pointTransactions = _summaryData!['pointTransactions'] as List? ?? [];
+    final totalCharacters = _summaryData!['totalCharacters'] as int? ?? 0;
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -333,38 +245,36 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
               ),
             ),
             const SizedBox(height: 16),
-            if ((_summaryData!['totalTasks'] as int) > 0) ...[
+            if (totalTasks > 0) ...[
               _buildActivityItem(
                 icon: Icons.task_alt,
                 title: 'Tasks Completed',
-                value: '${_summaryData!['completedTasks']} tasks',
-                subtitle: 'Earned RM${(_summaryData!['totalEarnings'] as double).toStringAsFixed(2)}',
+                value: '$totalTasks tasks',
+                subtitle: 'Earned RM${totalEarnings.toStringAsFixed(2)}',
                 color: Colors.green,
               ),
             ],
-            if ((_summaryData!['pointsEarned'] as int) > 0) ...[
+            if (pointsEarned > 0) ...[
               const SizedBox(height: 12),
               _buildActivityItem(
                 icon: Icons.stars,
                 title: 'Points Earned',
-                value: '${_summaryData!['pointsEarned']} points',
-                subtitle: '${(_summaryData!['pointTransactions'] as List).length} transactions',
+                value: '$pointsEarned points',
+                subtitle: '${pointTransactions.length} transactions',
                 color: Colors.amber[700]!,
               ),
             ],
-            if ((_summaryData!['translationsCount'] as int) > 0) ...[
+            if (translationsCount > 0) ...[
               const SizedBox(height: 12),
               _buildActivityItem(
                 icon: Icons.translate,
                 title: 'Translations',
-                value: '${_summaryData!['translationsCount']} translations',
-                subtitle: '${_summaryData!['totalCharacters']} characters translated',
+                value: '$translationsCount translations',
+                subtitle: '$totalCharacters characters translated',
                 color: Colors.blue,
               ),
             ],
-            if ((_summaryData!['totalTasks'] as int) == 0 &&
-                (_summaryData!['pointsEarned'] as int) == 0 &&
-                (_summaryData!['translationsCount'] as int) == 0) ...[
+            if (totalTasks == 0 && pointsEarned == 0 && translationsCount == 0) ...[
               Center(
                 child: Column(
                   children: [
@@ -457,11 +367,13 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
   }
 
   Widget _buildTaskBreakdown() {
-    if (_summaryData == null || (_summaryData!['tasksByCategory'] as Map).isEmpty) {
+    if (_summaryData == null) return const SizedBox.shrink();
+
+    final tasksByCategory = _summaryData!['tasksByCategory'] as Map<String, int>? ?? <String, int>{};
+
+    if (tasksByCategory.isEmpty) {
       return const SizedBox.shrink();
     }
-
-    final categories = _summaryData!['tasksByCategory'] as Map<String, int>;
 
     return Card(
       elevation: 2,
@@ -480,7 +392,7 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
               ),
             ),
             const SizedBox(height: 16),
-            ...categories.entries.map((entry) => _buildCategoryItem(entry.key, entry.value)),
+            ...tasksByCategory.entries.map((entry) => _buildCategoryItem(entry.key, entry.value)),
           ],
         ),
       ),
@@ -539,41 +451,53 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
   Widget _buildDetailedTimeline() {
     if (_summaryData == null) return const SizedBox.shrink();
 
-    final tasks = _summaryData!['taskDetails'] as List<Map<String, dynamic>>;
-    final points = _summaryData!['pointTransactions'] as List<Map<String, dynamic>>;
-    final translations = _summaryData!['translationDetails'] as List<Map<String, dynamic>>;
+    final taskDetails = _summaryData!['taskDetails'] as List<Map<String, dynamic>>? ?? [];
+    final pointTransactions = _summaryData!['pointTransactions'] as List<Map<String, dynamic>>? ?? [];
+    final translationDetails = _summaryData!['translationDetails'] as List<Map<String, dynamic>>? ?? [];
 
     // Combine all activities and sort by time
     List<Widget> timelineItems = [];
 
-    for (var task in tasks) {
-      timelineItems.add(_buildTimelineItem(
-        time: DateFormat('HH:mm').format(task['time']),
-        title: task['title'],
-        subtitle: 'Earned RM${(task['earnings'] as double).toStringAsFixed(2)}',
-        icon: Icons.task_alt,
-        color: Colors.green,
-      ));
+    for (var task in taskDetails) {
+      try {
+        timelineItems.add(_buildTimelineItem(
+          time: DateFormat('HH:mm').format(task['time']),
+          title: task['title'],
+          subtitle: 'Earned RM${(task['earnings'] as double).toStringAsFixed(2)}',
+          icon: Icons.task_alt,
+          color: Colors.green,
+        ));
+      } catch (e) {
+        print('Error building task timeline item: $e');
+      }
     }
 
-    for (var point in points) {
-      timelineItems.add(_buildTimelineItem(
-        time: DateFormat('HH:mm').format(point['timestamp']),
-        title: point['description'],
-        subtitle: '+${(point['points'] as num).toInt()} points',
-        icon: Icons.stars,
-        color: Colors.amber[700]!,
-      ));
+    for (var point in pointTransactions) {
+      try {
+        timelineItems.add(_buildTimelineItem(
+          time: DateFormat('HH:mm').format(point['timestamp']),
+          title: point['description'],
+          subtitle: '+${point['points']} points',
+          icon: Icons.stars,
+          color: Colors.amber[700]!,
+        ));
+      } catch (e) {
+        print('Error building point timeline item: $e');
+      }
     }
 
-    for (var translation in translations) {
-      timelineItems.add(_buildTimelineItem(
-        time: DateFormat('HH:mm').format(translation['timestamp']),
-        title: '${translation['fromLanguage']} → ${translation['toLanguage']}',
-        subtitle: '${translation['characters']} characters',
-        icon: Icons.translate,
-        color: Colors.blue,
-      ));
+    for (var translation in translationDetails) {
+      try {
+        timelineItems.add(_buildTimelineItem(
+          time: DateFormat('HH:mm').format(translation['timestamp']),
+          title: '${translation['fromLanguage']} → ${translation['toLanguage']}',
+          subtitle: '${translation['characters']} characters',
+          icon: Icons.translate,
+          color: Colors.blue,
+        ));
+      } catch (e) {
+        print('Error building translation timeline item: $e');
+      }
     }
 
     if (timelineItems.isEmpty) {
@@ -691,6 +615,12 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
               onPressed: _selectDate,
               tooltip: 'Select Date',
             ),
+            if (_currentUserId != null)
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _loadDailySummary,
+                tooltip: 'Refresh Data',
+              ),
           ],
         ),
         body: _isLoading
@@ -704,6 +634,31 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // User Info Card
+              if (_currentUserId != null)
+                Card(
+                  elevation: 1,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.person, color: Colors.grey[600], size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'User: ${_currentUserId!.substring(0, 8)}...',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: 16),
+
               // Date Header
               Card(
                 elevation: 2,
@@ -733,7 +688,7 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
                       const SizedBox(height: 8),
                       if (_summaryData != null) ...[
                         Text(
-                          'Productivity Score: ${((_summaryData!['completionRate'] as double?) ?? 0.0).toStringAsFixed(1)}%',
+                          'Productivity Score: ${(_summaryData!['completionRate'] as double? ?? 0.0).toStringAsFixed(1)}%',
                           style: GoogleFonts.poppins(
                             fontSize: 14,
                             color: Colors.white.withOpacity(0.9),
@@ -741,7 +696,7 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
                         ),
                         const SizedBox(height: 8),
                         LinearProgressIndicator(
-                          value: ((_summaryData!['completionRate'] as double?) ?? 0.0) / 100,
+                          value: (_summaryData!['completionRate'] as double? ?? 0.0) / 100,
                           backgroundColor: Colors.white.withOpacity(0.3),
                           valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
                         ),
@@ -765,25 +720,25 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
                   children: [
                     _buildStatCard(
                       title: 'Tasks Completed',
-                      value: ((_summaryData!['totalTasks'] as num?) ?? 0).toInt().toString(),
+                      value: (_summaryData!['totalTasks'] as int? ?? 0).toString(),
                       icon: Icons.task_alt,
                       color: const Color(0xFF006D77),
                     ),
                     _buildStatCard(
                       title: 'Points Earned',
-                      value: ((_summaryData!['pointsEarned'] as num?) ?? 0).toInt().toString(),
+                      value: (_summaryData!['pointsEarned'] as int? ?? 0).toString(),
                       icon: Icons.stars,
                       color: Colors.amber[700]!,
                     ),
                     _buildStatCard(
                       title: 'Total Earnings',
-                      value: 'RM${((_summaryData!['totalEarnings'] as num?) ?? 0.0).toDouble().toStringAsFixed(2)}',
+                      value: 'RM${(_summaryData!['totalEarnings'] as double? ?? 0.0).toStringAsFixed(2)}',
                       icon: Icons.attach_money,
                       color: Colors.green,
                     ),
                     _buildStatCard(
                       title: 'Translations',
-                      value: ((_summaryData!['translationsCount'] as num?) ?? 0).toInt().toString(),
+                      value: (_summaryData!['translationsCount'] as int? ?? 0).toString(),
                       icon: Icons.translate,
                       color: Colors.blue,
                     ),
@@ -819,6 +774,17 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
                           style: GoogleFonts.poppins(
                             fontSize: 16,
                             color: Colors.grey[600],
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _currentUserId != null
+                              ? 'User: ${_currentUserId!.substring(0, 8)}...'
+                              : 'No user logged in',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey[500],
                           ),
                           textAlign: TextAlign.center,
                         ),
