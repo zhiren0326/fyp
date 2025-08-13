@@ -14,20 +14,36 @@ class PrivacyPage extends StatefulWidget {
   _PrivacyPageState createState() => _PrivacyPageState();
 }
 
-class _PrivacyPageState extends State<PrivacyPage> {
+class _PrivacyPageState extends State<PrivacyPage> with TickerProviderStateMixin {
   bool _allowDataSharing = false;
   bool _enableLocationTracking = false;
   bool _isFirebaseInitialized = false;
   User? _currentUser;
   late FirebaseAnalytics _analytics;
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
 
   @override
   void initState() {
     super.initState();
     _analytics = FirebaseAnalytics.instance;
+    _animationController = AnimationController(
+      duration: Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
     _checkFirebaseInitialization();
     _checkUserAndLoadPreferences();
-    _logScreenView(); // Log screen view when PrivacyPage is initialized
+    _logScreenView();
+    _animationController.forward();
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
   }
 
   // Log screen view for PrivacyPage
@@ -64,7 +80,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
         _isFirebaseInitialized = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Firebase initialization failed. Analytics may not work.')),
+        SnackBar(
+          content: Text('Firebase initialization failed. Analytics may not work.'),
+          backgroundColor: Colors.red.shade400,
+        ),
       );
     }
   }
@@ -77,7 +96,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
     } else {
       print('No user logged in');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please log in to access privacy settings')),
+        SnackBar(
+          content: Text('Please log in to access privacy settings'),
+          backgroundColor: Colors.orange.shade400,
+        ),
       );
     }
   }
@@ -104,7 +126,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
     } catch (e) {
       print('Error loading preferences: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load privacy settings: $e')),
+        SnackBar(
+          content: Text('Failed to load privacy settings: $e'),
+          backgroundColor: Colors.red.shade400,
+        ),
       );
     }
   }
@@ -113,7 +138,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
   Future<void> _saveDataSharingPreference(bool value) async {
     if (_currentUser == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please log in to save privacy settings')),
+        SnackBar(
+          content: Text('Please log in to save privacy settings'),
+          backgroundColor: Colors.orange.shade400,
+        ),
       );
       setState(() {
         _allowDataSharing = false;
@@ -142,23 +170,35 @@ class _PrivacyPageState extends State<PrivacyPage> {
             },
           );
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Data sharing ${value ? 'enabled' : 'disabled'}')),
+            SnackBar(
+              content: Text('Data sharing ${value ? 'enabled' : 'disabled'}'),
+              backgroundColor: Colors.green.shade400,
+            ),
           );
         } catch (e) {
           print('Error updating analytics: $e');
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to update analytics settings: $e')),
+            SnackBar(
+              content: Text('Failed to update analytics settings: $e'),
+              backgroundColor: Colors.red.shade400,
+            ),
           );
         }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Data sharing ${value ? 'enabled' : 'disabled'}, but analytics not available')),
+          SnackBar(
+            content: Text('Data sharing ${value ? 'enabled' : 'disabled'}, but analytics not available'),
+            backgroundColor: Colors.orange.shade400,
+          ),
         );
       }
     } catch (e) {
       print('Error saving data sharing preference: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save data sharing preference: $e')),
+        SnackBar(
+          content: Text('Failed to save data sharing preference: $e'),
+          backgroundColor: Colors.red.shade400,
+        ),
       );
     }
   }
@@ -167,7 +207,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
   Future<void> _saveLocationTrackingPreference(bool value) async {
     if (_currentUser == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please log in to save privacy settings')),
+        SnackBar(
+          content: Text('Please log in to save privacy settings'),
+          backgroundColor: Colors.orange.shade400,
+        ),
       );
       setState(() {
         _enableLocationTracking = false;
@@ -188,7 +231,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
         await _startLocationTracking();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Location tracking disabled')),
+          SnackBar(
+            content: Text('Location tracking disabled'),
+            backgroundColor: Colors.orange.shade400,
+          ),
         );
         if (_isFirebaseInitialized) {
           try {
@@ -208,7 +254,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
     } catch (e) {
       print('Error saving location tracking preference: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save location tracking preference: $e')),
+        SnackBar(
+          content: Text('Failed to save location tracking preference: $e'),
+          backgroundColor: Colors.red.shade400,
+        ),
       );
     }
   }
@@ -217,7 +266,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
   Future<void> _startLocationTracking() async {
     if (_currentUser == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please log in to enable location tracking')),
+        SnackBar(
+          content: Text('Please log in to enable location tracking'),
+          backgroundColor: Colors.orange.shade400,
+        ),
       );
       setState(() {
         _enableLocationTracking = false;
@@ -230,8 +282,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Location services are disabled. Please enable them in settings.'),
+          backgroundColor: Colors.orange.shade400,
           action: SnackBarAction(
             label: 'Open Settings',
+            textColor: Colors.white,
             onPressed: () async {
               await Geolocator.openLocationSettings();
               if (await Geolocator.isLocationServiceEnabled()) {
@@ -259,7 +313,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
           );
           print('Location: ${position.latitude}, ${position.longitude}');
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Location tracking enabled')),
+            SnackBar(
+              content: Text('Location tracking enabled'),
+              backgroundColor: Colors.green.shade400,
+            ),
           );
           if (_isFirebaseInitialized && _allowDataSharing) {
             try {
@@ -293,7 +350,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
           retries--;
           if (retries == 0) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to access location: $errorMessage')),
+              SnackBar(
+                content: Text('Failed to access location: $errorMessage'),
+                backgroundColor: Colors.red.shade400,
+              ),
             );
             setState(() {
               _enableLocationTracking = false;
@@ -307,8 +367,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Location permission permanently denied. Please enable in settings.'),
+          backgroundColor: Colors.red.shade400,
           action: SnackBarAction(
             label: 'Open Settings',
+            textColor: Colors.white,
             onPressed: () async {
               await openAppSettings();
               if (await Permission.locationWhenInUse.isGranted) {
@@ -324,7 +386,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
       });
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Location permission denied')),
+        SnackBar(
+          content: Text('Location permission denied'),
+          backgroundColor: Colors.red.shade400,
+        ),
       );
       setState(() {
         _enableLocationTracking = false;
@@ -355,18 +420,39 @@ class _PrivacyPageState extends State<PrivacyPage> {
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text('Privacy Policy'),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Icon(Icons.privacy_tip, color: Color(0xFF6366F1), size: 28),
+              SizedBox(width: 10),
+              Text(
+                'Privacy Policy',
+                style: TextStyle(
+                  color: Color(0xFF1F2937),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
           content: SingleChildScrollView(
             child: Text(
               'Unable to load privacy policy. Please check your internet connection or contact support.\n\n'
                   'This is a placeholder for the privacy policy. In a real app, this would contain detailed information '
                   'about data usage, storage, and user rights.\n\nLast updated: July 20, 2025',
+              style: TextStyle(color: Color(0xFF6B7280), height: 1.5),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text('Close', style: TextStyle(color: Colors.teal)),
+              style: TextButton.styleFrom(
+                foregroundColor: Color(0xFF6366F1),
+                backgroundColor: Color(0xFFF3F4F6),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              ),
+              child: Text('Close', style: TextStyle(fontWeight: FontWeight.w600)),
             ),
           ],
         ),
@@ -380,8 +466,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Please log in to save privacy settings'),
+          backgroundColor: Colors.orange.shade400,
           action: SnackBarAction(
             label: 'Log In',
+            textColor: Colors.white,
             onPressed: () => Navigator.pushReplacement(
               context,
               MaterialPageRoute(builder: (context) => AccountPage()),
@@ -405,129 +493,420 @@ class _PrivacyPageState extends State<PrivacyPage> {
           },
         );
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Privacy settings saved successfully')),
+          SnackBar(
+            content: Text('Privacy settings saved successfully'),
+            backgroundColor: Colors.green.shade400,
+          ),
         );
       } catch (e) {
         print('Error logging save settings: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Settings saved, but analytics logging failed: $e')),
+          SnackBar(
+            content: Text('Settings saved, but analytics logging failed: $e'),
+            backgroundColor: Colors.orange.shade400,
+          ),
         );
       }
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Settings saved, but analytics not available')),
+        SnackBar(
+          content: Text('Settings saved, but analytics not available'),
+          backgroundColor: Colors.orange.shade400,
+        ),
       );
     }
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: EdgeInsets.symmetric(vertical: 30, horizontal: 20),
+      child: Column(
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF8B5CF6), Color(0xFF6366F1)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(25),
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0xFF8B5CF6).withOpacity(0.3),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Icon(
+              Icons.security,
+              color: Colors.white,
+              size: 40,
+            ),
+          ),
+          SizedBox(height: 20),
+          Text(
+            'Privacy Settings',
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1F2937),
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Manage your data and privacy preferences',
+            style: TextStyle(
+              fontSize: 16,
+              color: Color(0xFF6B7280),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSettingCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required bool value,
+    required Function(bool) onChanged,
+    required List<Color> gradientColors,
+  }) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFF1F2937).withOpacity(0.08),
+            blurRadius: 20,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(20),
+        child: Row(
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: gradientColors,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Icon(
+                icon,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF1F2937),
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Transform.scale(
+              scale: 1.2,
+              child: Switch(
+                value: value,
+                onChanged: _currentUser != null ? onChanged : null,
+                activeColor: gradientColors[1],
+                activeTrackColor: gradientColors[0].withOpacity(0.3),
+                inactiveThumbColor: Color(0xFFE5E7EB),
+                inactiveTrackColor: Color(0xFFF3F4F6),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrivacyPolicyCard() {
+    return Container(
+      margin: EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFF1F2937).withOpacity(0.08),
+            blurRadius: 20,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: _launchPrivacyPolicy,
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Row(
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF10B981), Color(0xFF059669)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  child: Icon(
+                    Icons.article,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'View Privacy Policy',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1F2937),
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Learn more about how we handle your data',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.arrow_forward_ios,
+                    color: Color(0xFF6B7280),
+                    size: 16,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSaveButton() {
+    return Container(
+      width: double.infinity,
+      height: 56,
+      decoration: BoxDecoration(
+        gradient: _currentUser != null
+            ? LinearGradient(
+          colors: [Color(0xFF8B5CF6), Color(0xFF6366F1)],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+        )
+            : LinearGradient(
+          colors: [Color(0xFFE5E7EB), Color(0xFFD1D5DB)],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: _currentUser != null
+            ? [
+          BoxShadow(
+            color: Color(0xFF8B5CF6).withOpacity(0.3),
+            blurRadius: 20,
+            offset: Offset(0, 8),
+          ),
+        ]
+            : [],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: _currentUser != null
+              ? _saveSettings
+              : () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Please log in to save privacy settings'),
+                backgroundColor: Colors.orange.shade400,
+                action: SnackBarAction(
+                  label: 'Log In',
+                  textColor: Colors.white,
+                  onPressed: () => Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (context) => AccountPage()),
+                  ),
+                ),
+              ),
+            );
+          },
+          child: Center(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  _currentUser != null ? Icons.save : Icons.login,
+                  color: _currentUser != null ? Colors.white : Color(0xFF9CA3AF),
+                  size: 20,
+                ),
+                SizedBox(width: 8),
+                Text(
+                  _currentUser != null ? 'Save Changes' : 'Log In to Save',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: _currentUser != null ? Colors.white : Color(0xFF9CA3AF),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Color(0xFFF8FAFC),
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        leading: Container(
+          margin: EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Color(0xFF1F2937).withOpacity(0.1),
+                blurRadius: 10,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: IconButton(
+            icon: Icon(Icons.arrow_back, color: Color(0xFF374151)),
+            onPressed: () => Navigator.pop(context),
+          ),
         ),
-        title: const Text('Privacy'),
-        centerTitle: true,
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
         actions: [
-          IconButton(
-            icon: Icon(Icons.save, color: _currentUser != null ? Colors.white : Colors.grey),
-            onPressed: _currentUser != null ? _saveSettings : null,
-            tooltip: _currentUser != null ? 'Save Settings' : 'Log in to save settings',
+          Container(
+            margin: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0xFF1F2937).withOpacity(0.1),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: IconButton(
+              icon: Icon(
+                Icons.save,
+                color: _currentUser != null ? Color(0xFF6366F1) : Color(0xFF9CA3AF),
+              ),
+              onPressed: _currentUser != null ? _saveSettings : null,
+              tooltip: _currentUser != null ? 'Save Settings' : 'Log in to save settings',
+            ),
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFB2DFDB), Colors.white],
-          ),
-        ),
-        child: ListView(
-          padding: EdgeInsets.all(16.0),
-          children: [
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              child: SwitchListTile(
-                title: Text('Allow Data Sharing'),
-                subtitle: Text('Share usage data to improve the app'),
-                value: _allowDataSharing,
-                onChanged: _currentUser != null
-                    ? (value) {
-                  setState(() {
-                    _allowDataSharing = value;
-                    _saveDataSharingPreference(value);
-                  });
-                }
-                    : null,
-                activeColor: Colors.teal,
-                inactiveTrackColor: Colors.grey,
-              ),
-            ),
-            SizedBox(height: 16),
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              child: SwitchListTile(
-                title: Text('Enable Location Tracking'),
-                subtitle: Text('Allow the app to access your location'),
-                value: _enableLocationTracking,
-                onChanged: _currentUser != null
-                    ? (value) {
-                  setState(() {
-                    _enableLocationTracking = value;
-                    _saveLocationTrackingPreference(value);
-                  });
-                }
-                    : null,
-                activeColor: Colors.teal,
-                inactiveTrackColor: Colors.grey,
-              ),
-            ),
-            SizedBox(height: 16),
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              child: ListTile(
-                title: Text('View Privacy Policy'),
-                subtitle: Text('Learn more about how we handle your data'),
-                trailing: Icon(Icons.arrow_forward_ios, color: Colors.teal),
-                onTap: _launchPrivacyPolicy,
-              ),
-            ),
-            SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _currentUser != null
-                  ? _saveSettings
-                  : () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Please log in to save privacy settings'),
-                    action: SnackBarAction(
-                      label: 'Log In',
-                      onPressed: () => Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(builder: (context) => AccountPage()),
-                      ),
+      body: FadeTransition(
+        opacity: _fadeAnimation,
+        child: SingleChildScrollView(
+          physics: BouncingScrollPhysics(),
+          child: Column(
+            children: [
+              _buildHeader(),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: [
+                    _buildSettingCard(
+                      title: 'Allow Data Sharing',
+                      subtitle: 'Share usage data to improve the app',
+                      icon: Icons.share,
+                      value: _allowDataSharing,
+                      onChanged: (value) {
+                        setState(() {
+                          _allowDataSharing = value;
+                          _saveDataSharingPreference(value);
+                        });
+                      },
+                      gradientColors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
                     ),
-                  ),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _currentUser != null ? Colors.teal : Colors.grey,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    _buildSettingCard(
+                      title: 'Enable Location Tracking',
+                      subtitle: 'Allow the app to access your location',
+                      icon: Icons.location_on,
+                      value: _enableLocationTracking,
+                      onChanged: (value) {
+                        setState(() {
+                          _enableLocationTracking = value;
+                          _saveLocationTrackingPreference(value);
+                        });
+                      },
+                      gradientColors: [Color(0xFFF59E0B), Color(0xFFD97706)],
+                    ),
+                    _buildPrivacyPolicyCard(),
+                    SizedBox(height: 20),
+                    _buildSaveButton(),
+                    SizedBox(height: 40),
+                  ],
+                ),
               ),
-              child: Text(_currentUser != null ? 'Save Changes' : 'Log In to Save'),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

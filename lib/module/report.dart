@@ -102,6 +102,7 @@ class _ReportScreenState extends State<ReportScreen>
         _loadMoneyData(),
         _loadTaskData(),
         _loadPointsData(),
+        _loadActivityData(),
       ]);
 
       setState(() {
@@ -111,6 +112,7 @@ class _ReportScreenState extends State<ReportScreen>
           moneyData: results[2] as MoneyData,
           taskData: results[3] as TaskData,
           pointsData: results[4] as PointsData,
+          activityData: results[5] as ActivityData,
         );
         _isLoading = false;
       });
@@ -475,6 +477,69 @@ class _ReportScreenState extends State<ReportScreen>
     }
   }
 
+  Future<ActivityData> _loadActivityData() async {
+    try {
+      final activitySnapshot = await _firestore
+          .collection('users')
+          .doc(_currentUserId)
+          .collection('activityLog')
+          .orderBy('timestamp', descending: true)
+          .limit(500) // Limit to prevent too much data loading
+          .get();
+
+      List<ActivityLogItem> activities = [];
+      Map<String, int> dailyActivityCount = {};
+      DateTime? oldestActivity;
+      DateTime? newestActivity;
+
+      for (var doc in activitySnapshot.docs) {
+        final data = doc.data();
+        final timestamp = data['timestamp'] != null
+            ? (data['timestamp'] as Timestamp).toDate()
+            : DateTime.now();
+
+        final activity = ActivityLogItem(
+          action: data['action'] ?? '',
+          progress: ((data['progress'] ?? 0) as num).toInt(),
+          status: data['status'] ?? '',
+          taskId: data['taskId'] ?? '',
+          taskTitle: data['taskTitle'] ?? '',
+          timestamp: timestamp,
+          updatedBy: data['updatedBy'] ?? '',
+        );
+
+        activities.add(activity);
+
+        // Count daily activities
+        String dateKey = DateFormat('yyyy-MM-dd').format(timestamp);
+        dailyActivityCount[dateKey] = (dailyActivityCount[dateKey] ?? 0) + 1;
+
+        // Track oldest and newest activities
+        if (oldestActivity == null || timestamp.isBefore(oldestActivity)) {
+          oldestActivity = timestamp;
+        }
+        if (newestActivity == null || timestamp.isAfter(newestActivity)) {
+          newestActivity = timestamp;
+        }
+      }
+
+      return ActivityData(
+        dailyActivityCount: dailyActivityCount,
+        recentActivities: activities,
+        oldestActivity: oldestActivity ?? DateTime.now(),
+        newestActivity: newestActivity ?? DateTime.now(),
+      );
+    } catch (e) {
+      print('Error loading activity data: $e');
+      return ActivityData(
+        dailyActivityCount: {},
+        recentActivities: [],
+        oldestActivity: DateTime.now(),
+        newestActivity: DateTime.now(),
+      );
+    }
+  }
+
   // Helper methods for calculations
   double _calculateWeeklyAverage(Map<String, int> dailyData) {
     if (dailyData.isEmpty) return 0.0;
@@ -532,6 +597,44 @@ class _ReportScreenState extends State<ReportScreen>
       return 'Research';
     }
     return 'General';
+  }
+
+  // Activity Helper Methods
+  List<Widget> _generateMonthLabels(DateTime startDate, DateTime endDate) {
+    List<Widget> labels = [];
+    DateTime current = DateTime(startDate.year, startDate.month, 1);
+
+    while (current.isBefore(endDate) || current.month == endDate.month) {
+      labels.add(
+        Text(
+          DateFormat('MMM').format(current),
+          style: TextStyle(fontSize: 9, color: Colors.grey[600]),
+        ),
+      );
+      current = DateTime(current.year, current.month + 1, 1);
+    }
+
+    return labels.length > 4 ? labels.sublist(labels.length - 4) : labels;
+  }
+
+  Color _getActivityColor(double intensity) {
+    if (intensity == 0) return Colors.grey[100]!;
+    if (intensity <= 0.25) return Color(0xFF667eea).withOpacity(0.3);
+    if (intensity <= 0.5) return Color(0xFF667eea).withOpacity(0.5);
+    if (intensity <= 0.75) return Color(0xFF667eea).withOpacity(0.7);
+    return Color(0xFF667eea);
+  }
+
+  String _getMostActiveDay() {
+    if (_reportData?.activityData.dailyActivityCount.isEmpty ?? true) {
+      return 'No data';
+    }
+
+    var mostActiveEntry = _reportData!.activityData.dailyActivityCount.entries
+        .reduce((a, b) => a.value > b.value ? a : b);
+
+    final date = DateTime.parse(mostActiveEntry.key);
+    return '${DateFormat('MMM dd').format(date)} (${mostActiveEntry.value} activities)';
   }
 
   // Enhanced PDF Generation
@@ -1319,6 +1422,9 @@ class _ReportScreenState extends State<ReportScreen>
       activeDays.add(DateFormat('yyyy-MM-dd').format(task.lastUpdated));
     }
 
+    // Add days from activities
+    activeDays.addAll(_reportData!.activityData.dailyActivityCount.keys);
+
     return activeDays.length;
   }
 
@@ -1410,6 +1516,11 @@ class _ReportScreenState extends State<ReportScreen>
       recommendations.add('Maintain consistent daily activity to build momentum and improve results');
     }
 
+    // Activity-based recommendations
+    if (_reportData!.activityData.recentActivities.isEmpty) {
+      recommendations.add('Start logging activities to track progress and identify improvement areas');
+    }
+
     return recommendations;
   }
 
@@ -1422,8 +1533,9 @@ class _ReportScreenState extends State<ReportScreen>
     double verifiedSkillScore = _reportData!.userSkills.verifiedCount * 3.0;
     double pointScore = _reportData!.pointsData.totalPoints * 0.1;
     double moneyScore = _reportData!.moneyData.totalAmount * 0.5;
+    double activityScore = _reportData!.activityData.recentActivities.length * 0.5;
 
-    double totalScore = translationScore + taskScore + skillScore + verifiedSkillScore + pointScore + moneyScore;
+    double totalScore = translationScore + taskScore + skillScore + verifiedSkillScore + pointScore + moneyScore + activityScore;
 
     return (totalScore).clamp(0.0, 100.0);
   }
@@ -1768,6 +1880,21 @@ class _ReportScreenState extends State<ReportScreen>
               Expanded(child: _buildStatCard('Avg/Day', _reportData!.pointsData.averagePointsPerDay.toStringAsFixed(1), Icons.trending_up)),
               SizedBox(width: 8),
               Expanded(child: _buildStatCard('Transactions', _reportData!.pointsData.recentTransactions.length.toString(), Icons.receipt)),
+            ],
+          ),
+
+          SizedBox(height: 20),
+
+          // Activity Stats
+          _buildSectionHeader('Activity Overview', Icons.track_changes),
+          SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _buildStatCard('Total Activities', _reportData!.activityData.recentActivities.length.toString(), Icons.trending_up)),
+              SizedBox(width: 8),
+              Expanded(child: _buildStatCard('Active Days', _reportData!.activityData.dailyActivityCount.keys.length.toString(), Icons.calendar_today)),
+              SizedBox(width: 8),
+              Expanded(child: _buildStatCard('Last Activity', DateFormat('MMM dd').format(_reportData!.activityData.newestActivity), Icons.history)),
             ],
           ),
 
@@ -2186,11 +2313,11 @@ class _ReportScreenState extends State<ReportScreen>
             SizedBox(height: 30),
           ],
 
-          // Performance Radar Chart Alternative (using circular indicators)
+          // Performance Overview (Fixed Overflow)
           _buildSectionHeader('Performance Overview', Icons.radar),
           SizedBox(height: 12),
           Container(
-            height: 200,
+            height: 220,
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -2198,25 +2325,213 @@ class _ReportScreenState extends State<ReportScreen>
               ),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildPerformanceIndicator('Tasks', _reportData!.taskData.completedTasks.toDouble(), 50),
-                _buildPerformanceIndicator('Skills', _reportData!.userSkills.totalSkills.toDouble(), 100),
-                _buildPerformanceIndicator('Translations', _reportData!.translationStats.totalTranslations.toDouble(), 200),
-                _buildPerformanceIndicator('Points', _reportData!.pointsData.totalPoints.toDouble(), 2000),
-                _buildPerformanceIndicator('Earnings', _reportData!.moneyData.totalAmount, 500),
-              ],
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildPerformanceIndicator('Tasks', _reportData!.taskData.completedTasks.toDouble(), 50),
+                  SizedBox(width: 20),
+                  _buildPerformanceIndicator('Skills', _reportData!.userSkills.totalSkills.toDouble(), 100),
+                  SizedBox(width: 20),
+                  _buildPerformanceIndicator('Translations', _reportData!.translationStats.totalTranslations.toDouble(), 200),
+                  SizedBox(width: 20),
+                  _buildPerformanceIndicator('Points', _reportData!.pointsData.totalPoints.toDouble(), 2000),
+                  SizedBox(width: 20),
+                  _buildPerformanceIndicator('Earnings', _reportData!.moneyData.totalAmount, 500),
+                  SizedBox(width: 20),
+                  _buildPerformanceIndicator('Activities', _reportData!.activityData.recentActivities.length.toDouble(), 100),
+                ],
+              ),
             ),
           ),
           SizedBox(height: 30),
 
-          // Daily Activity Heatmap Alternative
+          // Activity Patterns (with real Firebase data)
           _buildSectionHeader('Activity Patterns', Icons.grid_view),
+          SizedBox(height: 8),
+          Text(
+            'Daily activity over the last 10 weeks',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
           SizedBox(height: 12),
           _buildActivityGrid(),
+          SizedBox(height: 20),
+
+          // Activity Statistics
+          if (_reportData!.activityData.recentActivities.isNotEmpty) ...[
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Activity Summary',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Total Activities:', style: TextStyle(fontSize: 12)),
+                      Text('${_reportData!.activityData.recentActivities.length}',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Most Active Day:', style: TextStyle(fontSize: 12)),
+                      Text('${_getMostActiveDay()}',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Last Activity:', style: TextStyle(fontSize: 12)),
+                      Text('${DateFormat('MMM dd, HH:mm').format(_reportData!.activityData.newestActivity)}',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _buildActivityGrid() {
+    if (_reportData?.activityData.dailyActivityCount.isEmpty ?? true) {
+      return Container(
+        height: 150,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.calendar_today, color: Colors.grey[400], size: 48),
+              SizedBox(height: 8),
+              Text(
+                'No activity data available',
+                style: TextStyle(color: Colors.grey[600], fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Calculate date range for the grid (last 10 weeks)
+    final today = DateTime.now();
+    final startDate = today.subtract(Duration(days: 69)); // 10 weeks * 7 days - 1
+    final dateRange = List.generate(70, (index) => startDate.add(Duration(days: index)));
+
+    // Get max activity count for color intensity calculation
+    final maxActivity = _reportData!.activityData.dailyActivityCount.values.isNotEmpty
+        ? _reportData!.activityData.dailyActivityCount.values.reduce((a, b) => a > b ? a : b)
+        : 1;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Week day labels
+        Padding(
+          padding: EdgeInsets.only(left: 30),
+          child: Row(
+            children: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                .map((day) => Expanded(
+              child: Text(
+                day,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+              ),
+            ))
+                .toList(),
+          ),
+        ),
+        SizedBox(height: 8),
+
+        // Activity grid
+        Container(
+          height: 120,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Month labels
+              Container(
+                width: 25,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: _generateMonthLabels(startDate, today),
+                ),
+              ),
+              SizedBox(width: 5),
+
+              // Activity grid
+              Expanded(
+                child: GridView.builder(
+                  physics: NeverScrollableScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 7,
+                    crossAxisSpacing: 2,
+                    mainAxisSpacing: 2,
+                  ),
+                  itemCount: 70,
+                  itemBuilder: (context, index) {
+                    final date = dateRange[index];
+                    final dateKey = DateFormat('yyyy-MM-dd').format(date);
+                    final activityCount = _reportData!.activityData.dailyActivityCount[dateKey] ?? 0;
+                    final intensity = maxActivity > 0 ? (activityCount / maxActivity) : 0.0;
+
+                    return Tooltip(
+                      message: '${DateFormat('MMM dd, yyyy').format(date)}\n$activityCount activities',
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _getActivityColor(intensity),
+                          borderRadius: BorderRadius.circular(2),
+                          border: Border.all(
+                            color: Colors.grey[300]!,
+                            width: 0.5,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: 12),
+
+        // Legend
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('Less', style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+            SizedBox(width: 8),
+            ...List.generate(5, (index) => Container(
+              margin: EdgeInsets.symmetric(horizontal: 1),
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: _getActivityColor(index / 4.0),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            )),
+            SizedBox(width: 8),
+            Text('More', style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+          ],
+        ),
+      ],
     );
   }
 
@@ -2366,32 +2681,6 @@ class _ReportScreenState extends State<ReportScreen>
     );
   }
 
-  Widget _buildActivityGrid() {
-    // Create a 7x8 grid representing activity pattern (simplified heatmap)
-    return Container(
-      height: 150,
-      child: GridView.builder(
-        physics: NeverScrollableScrollPhysics(),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 7,
-          crossAxisSpacing: 2,
-          mainAxisSpacing: 2,
-        ),
-        itemCount: 35, // 5 weeks
-        itemBuilder: (context, index) {
-          // Random activity intensity for demo (in real app, use actual data)
-          final intensity = math.Random().nextDouble();
-          return Container(
-            decoration: BoxDecoration(
-              color: Color(0xFF667eea).withOpacity(intensity * 0.8 + 0.1),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
   Widget _buildSectionHeader(String title, IconData icon) {
     return Row(
       children: [
@@ -2523,6 +2812,7 @@ class ReportData {
   final MoneyData moneyData;
   final TaskData taskData;
   final PointsData pointsData;
+  final ActivityData activityData;
 
   ReportData({
     required this.translationStats,
@@ -2530,6 +2820,7 @@ class ReportData {
     required this.moneyData,
     required this.taskData,
     required this.pointsData,
+    required this.activityData,
   });
 }
 
@@ -2718,5 +3009,39 @@ class TranslationData {
     required this.sourceText,
     required this.translatedText,
     required this.charactersCount,
+  });
+}
+
+class ActivityData {
+  final Map<String, int> dailyActivityCount;
+  final List<ActivityLogItem> recentActivities;
+  final DateTime oldestActivity;
+  final DateTime newestActivity;
+
+  ActivityData({
+    required this.dailyActivityCount,
+    required this.recentActivities,
+    required this.oldestActivity,
+    required this.newestActivity,
+  });
+}
+
+class ActivityLogItem {
+  final String action;
+  final int progress;
+  final String status;
+  final String taskId;
+  final String taskTitle;
+  final DateTime timestamp;
+  final String updatedBy;
+
+  ActivityLogItem({
+    required this.action,
+    required this.progress,
+    required this.status,
+    required this.taskId,
+    required this.taskTitle,
+    required this.timestamp,
+    required this.updatedBy,
   });
 }

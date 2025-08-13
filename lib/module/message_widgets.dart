@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -488,34 +490,7 @@ class MessageBubble extends StatelessWidget {
                   );
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.translate, color: Colors.teal),
-                title: const Text('Translate Message'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _translateMessage(context, messageData['text']);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.translate_outlined, color: Colors.blue),
-                title: const Text('Translate All Messages'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _translateAllMessages(context);
-                },
-              ),
-
             ],
-            if (messageData['type'] == 'voice')
-              ListTile(
-                leading: const Icon(Icons.translate, color: Colors.purple),
-                title: const Text('Translate Voice (Manual)'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showSimpleVoiceTranslation(context);
-                },
-              ),
-
 
             if (messageData['type'] == 'file' && fileService.isTranslationSupported(
                 (messageData['fileName'] as String).split('.').last))
@@ -1633,115 +1608,755 @@ class MessageBubble extends StatelessWidget {
   }
 
   Future<void> _translateVoiceMessage(BuildContext context, Map<String, dynamic> messageData) async {
+    // Create a completer to handle the dialog result
+    final Completer<void> dialogCompleter = Completer<void>();
+    bool isLoadingDialogShowing = false;
+
+    // Store context reference early
+    final navigator = Navigator.of(context);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     try {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(child: CircularProgressIndicator()),
-      );
+      // Check if context is still mounted before showing dialog
+      if (!context.mounted) {
+        print('Context not mounted at start');
+        return;
+      }
+
 
       // Save voice to temporary file
       final tempDir = await getTemporaryDirectory();
-      final voiceFile = File('${tempDir.path}/${messageData['voiceFileName']}');
+      final voiceFileName = messageData['voiceFileName'] ?? 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      final voiceFile = File('${tempDir.path}/$voiceFileName');
+
+      print('Saving voice file to: ${voiceFile.path}');
       await voiceFile.writeAsBytes(base64Decode(messageData['voiceBase64']));
 
-      final result = await fileService.translateVoiceMessage(
-        voiceFile.path,
-        selectedLanguage,
-        languageNames[selectedLanguage] ?? selectedLanguage,
+      // Verify file was created
+      if (!await voiceFile.exists()) {
+        throw Exception('Failed to create voice file');
+      }
+
+      print('Voice file saved successfully, size: ${await voiceFile.length()} bytes');
+
+      // Call the translation service
+      Map<String, String>? result;
+      try {
+        result = await fileService.translateVoiceMessage(
+          voiceFile.path,
+          selectedLanguage,
+          languageNames[selectedLanguage] ?? selectedLanguage,
+        );
+        print('Translation service result: $result');
+      } catch (serviceError) {
+        print('Translation service error: $serviceError');
+        throw Exception('Translation service failed: $serviceError');
+      }
+
+      // Clean up temporary file
+      try {
+        await voiceFile.delete();
+        print('Temporary voice file deleted');
+      } catch (deleteError) {
+        print('Warning: Could not delete temporary file: $deleteError');
+      }
+
+      // Process the result
+      if (result != null && result.isNotEmpty) {
+        final originalText = result['original'];
+        final translatedText = result['translation'];
+
+        print('Original text: $originalText');
+        print('Translated text: $translatedText');
+
+        if (translatedText == null || translatedText.trim().isEmpty) {
+          throw Exception('Empty translation result');
+        }
+
+        // Dismiss loading dialog immediately before handling result
+        if (isLoadingDialogShowing) {
+          try {
+            if (context.mounted) {
+              Navigator.of(context).pop();
+              print('Loading dialog dismissed before success handler');
+            }
+            isLoadingDialogShowing = false;
+          } catch (e) {
+            print('Error dismissing loading dialog before success: $e');
+          }
+        }
+
+        // Wait to ensure dialog is dismissed
+        await Future.delayed(const Duration(milliseconds: 300));
+
+        // Handle translation success
+        _handleTranslationSuccess(
+          context,
+          navigator,
+          scaffoldMessenger,
+          originalText,
+          translatedText,
+          false, // Dialog already dismissed
+        );
+
+      } else {
+        // Translation failed or returned null/empty result
+        print('Translation result is null or empty: $result');
+
+        // Dismiss loading dialog immediately before handling failure
+        if (isLoadingDialogShowing) {
+          try {
+            if (context.mounted) {
+              Navigator.of(context).pop();
+              print('Loading dialog dismissed before failure handler');
+            }
+            isLoadingDialogShowing = false;
+          } catch (e) {
+            print('Error dismissing loading dialog before failure: $e');
+          }
+        }
+
+        // Wait to ensure dialog is dismissed
+        await Future.delayed(const Duration(milliseconds: 300));
+
+        _handleTranslationFailure(
+          context,
+          navigator,
+          scaffoldMessenger,
+          'Voice translation failed - no result returned',
+          false, // Dialog already dismissed
+        );
+      }
+
+    } catch (e) {
+      print('Voice translation error: $e');
+      print('Stack trace: ${StackTrace.current}');
+
+      // Dismiss loading dialog immediately in catch block
+      if (isLoadingDialogShowing) {
+        try {
+          if (context.mounted) {
+            Navigator.of(context).pop();
+            print('Loading dialog dismissed in catch block');
+          }
+          isLoadingDialogShowing = false;
+        } catch (dismissError) {
+          print('Error dismissing loading dialog in catch: $dismissError');
+          // Try with root navigator as last resort
+          try {
+            Navigator.of(context, rootNavigator: true).pop();
+            print('Loading dialog dismissed with root navigator in catch');
+          } catch (rootError) {
+            print('Root navigator dismiss failed in catch: $rootError');
+          }
+        }
+      }
+
+      // Wait to ensure dialog is dismissed
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      _handleTranslationFailure(
+        context,
+        navigator,
+        scaffoldMessenger,
+        'Voice translation error: $e',
+        false, // Dialog already dismissed
       );
+    }
+  }
 
-      Navigator.pop(context);
+  void _handleTranslationSuccess(
+      BuildContext originalContext,
+      NavigatorState navigator,
+      ScaffoldMessengerState scaffoldMessenger,
+      String? originalText,
+      String translatedText,
+      bool isLoadingDialogShowing, // This should now always be false
+      ) async {
+    try {
+      print('Handling translation success...');
 
-      if (result != null) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Row(
-              children: [
-                Icon(Icons.mic, color: Colors.blue[700]),
-                const SizedBox(width: 8),
-                const Text('Voice Translation'),
-              ],
-            ),
+      // Additional safety check - if somehow loading dialog is still showing
+      if (isLoadingDialogShowing) {
+        print('Warning: Loading dialog still showing in success handler');
+        try {
+          if (originalContext.mounted) {
+            Navigator.of(originalContext).pop();
+            print('Emergency loading dialog dismissal in success handler');
+          }
+        } catch (e) {
+          print('Emergency dismissal failed: $e');
+        }
+        // Wait extra time after emergency dismissal
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+
+      // Check if we can still show dialogs
+      if (!originalContext.mounted) {
+        print('Context no longer mounted, showing enhanced snackbar instead of dialog');
+        // Use the stored scaffold messenger to show result with more options
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (showOriginalText && result['original'] != null) ...[
+                Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.white, size: 16),
+                    const SizedBox(width: 8),
+                    const Text('Voice Translation Complete',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                if (originalText != null && originalText.trim().isNotEmpty)
+                  Text('Original: $originalText',
+                      style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                Text('Translation: $translatedText',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 6),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      print('Showing result dialog...');
+
+      // Show success dialog - use a new context to avoid issues
+      await showDialog(
+        context: originalContext,
+        barrierDismissible: true,
+        builder: (dialogContext) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              const Text('Voice Translation Complete'),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Show original transcription if available
+                if (originalText != null && originalText.trim().isNotEmpty) ...[
                   Text(
                     'Original Transcription:',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Colors.grey[700],
+                      fontSize: 14,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 8),
                   Container(
-                    padding: const EdgeInsets.all(8),
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey[300]!),
                     ),
-                    child: Text(result['original']!),
+                    child: Text(
+                      originalText,
+                      style: const TextStyle(fontSize: 14),
+                    ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                 ],
+
+                // Show translation
                 Text(
-                  'Translation (${languageNames[selectedLanguage]}):',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  'Translation (${languageNames[selectedLanguage] ?? selectedLanguage}):',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[700],
+                    fontSize: 14,
+                  ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: Colors.blue[50],
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: Colors.blue[200]!),
                   ),
-                  child: SelectableText(result['translation']!),
+                  child: SelectableText(
+                    translatedText,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.blue[800],
+                    ),
+                  ),
                 ),
               ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              ),
-              TextButton(
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: result['translation']!));
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                print('User chose to just view translation');
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Close'),
+            ),
+            TextButton(
+              onPressed: () {
+                try {
+                  final textToCopy = (originalText != null && originalText.trim().isNotEmpty)
+                      ? 'Original: $originalText\nTranslation: $translatedText'
+                      : translatedText;
+                  Clipboard.setData(ClipboardData(text: textToCopy));
+                  Navigator.of(dialogContext).pop();
+                  print('Translation copied to clipboard');
+
+                  scaffoldMessenger.showSnackBar(
                     const SnackBar(
                       content: Text('Translation copied to clipboard'),
                       backgroundColor: Colors.green,
                     ),
                   );
-                },
-                child: const Text('Copy'),
+                } catch (e) {
+                  print('Error copying to clipboard: $e');
+                }
+              },
+              child: const Text('Copy'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                print('User chose to send as text message');
+                Navigator.of(dialogContext).pop();
+                _sendTranslationAsTextMessage(originalContext, originalText, translatedText);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Send as Text'),
+            ),
+          ],
+        ),
+      );
+
+      print('Result dialog completed');
+
+    } catch (e) {
+      print('Error in _handleTranslationSuccess: $e');
+      // Fallback to snackbar if dialog fails
+      try {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text('Voice translated: "$translatedText"'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Copy',
+              textColor: Colors.white,
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: translatedText));
+              },
+            ),
+          ),
+        );
+      } catch (snackbarError) {
+        print('Even snackbar failed: $snackbarError');
+      }
+    }
+  }
+
+  void _handleTranslationFailure(
+      BuildContext originalContext,
+      NavigatorState navigator,
+      ScaffoldMessengerState scaffoldMessenger,
+      String errorMessage,
+      bool isLoadingDialogShowing,
+      ) async {
+    try {
+      // Force dismiss loading dialog - try multiple approaches
+      if (isLoadingDialogShowing) {
+        try {
+          if (originalContext.mounted) {
+            Navigator.of(originalContext).pop();
+            print('Loading dialog dismissed using originalContext (failure)');
+          } else {
+            navigator.pop();
+            print('Loading dialog dismissed using stored navigator (failure)');
+          }
+        } catch (e) {
+          print('Error dismissing loading dialog in failure: $e');
+          // Try alternative approach
+          try {
+            Navigator.of(originalContext, rootNavigator: true).pop();
+            print('Loading dialog dismissed using root navigator (failure)');
+          } catch (e2) {
+            print('Root navigator dismiss also failed (failure): $e2');
+          }
+        }
+      }
+
+      // Wait longer for proper cleanup
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Show error message via snackbar (more reliable than dialog)
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text(errorMessage),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Try Manual',
+            textColor: Colors.white,
+            onPressed: () {
+              if (originalContext.mounted) {
+                _showManualVoiceTranslation(originalContext);
+              }
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      print('Error in _handleTranslationFailure: $e');
+    }
+  }
+
+// Rest of the methods remain the same but with better error handling...
+
+  Future<void> _sendTranslationAsTextMessage(BuildContext context, String? originalText, String translatedText) async {
+    if (!context.mounted) {
+      print('Context not mounted for sending text message');
+      return;
+    }
+
+    try {
+      print('Preparing to send translation as text message...');
+
+      // Create the message text based on user preferences
+      String messageText;
+      if (showOriginalText && originalText != null && originalText.trim().isNotEmpty) {
+        messageText = '🎤➡️📝 Voice Translation:\n\nOriginal: $originalText\nTranslation (${languageNames[selectedLanguage] ?? selectedLanguage}): $translatedText';
+      } else {
+        messageText = '🎤➡️📝 $translatedText';
+      }
+
+      print('Message text prepared: $messageText');
+
+      // Show confirmation dialog
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Send Translation'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('This will send the following message:'),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxHeight: 200),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    messageText,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
               ),
             ],
           ),
-        );
-      } else {
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Send Message'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm == true) {
+        print('Sending message to Firestore...');
+        await _sendMessageToFirestore(messageText);
+        print('Message sent successfully');
+
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Voice translation sent as text message'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('Error in _sendTranslationAsTextMessage: $e');
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Voice translation failed'),
+          SnackBar(
+            content: Text('Failed to send message: $e'),
             backgroundColor: Colors.red,
           ),
         );
       }
-    } catch (e) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Voice translation error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
     }
   }
+
+  Future<void> _sendMessageToFirestore(String messageText) async {
+    try {
+      final messageData = {
+        'text': messageText,
+        'type': 'text',
+        'timestamp': FieldValue.serverTimestamp(),
+        'senderCustomId': currentUserCustomId,
+        'senderName': 'You',
+        'isTranslation': true,
+        'translatedTo': selectedLanguage,
+      };
+
+      if (isGroup && groupId != null) {
+        await FirebaseFirestore.instance
+            .collection('groups')
+            .doc(groupId!)
+            .collection('messages')
+            .add(messageData);
+      } else {
+        await FirebaseFirestore.instance
+            .collection('messages')
+            .add({
+          ...messageData,
+          'participants': [currentUserCustomId, /* other user's ID */],
+        });
+      }
+    } catch (e) {
+      print('Error sending message to Firestore: $e');
+      throw e;
+    }
+  }
+
+  void _showManualVoiceTranslation(BuildContext context) {
+    if (!context.mounted) return;
+
+    String inputText = '';
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.edit, color: Colors.blue[700]),
+            const SizedBox(width: 8),
+            const Text('Manual Voice Translation'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Please type what you heard in the voice message:'),
+            const SizedBox(height: 16),
+            TextField(
+              onChanged: (value) => inputText = value,
+              decoration: const InputDecoration(
+                hintText: 'Enter the voice message text...',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 4,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: inputText.trim().isEmpty ? null : () async {
+              Navigator.pop(context);
+              if (inputText.trim().isNotEmpty) {
+                await _translateMessage(context, inputText.trim());
+              }
+            },
+            child: const Text('Translate'),
+          ),
+        ],
+      ),
+    );
+  }
+
+// New function to show translation options in a bottom sheet
+  void _showTranslationOptionsBottomSheet(BuildContext context, String? originalText, String translatedText) {
+    if (!context.mounted) {
+      print('Context still not mounted for bottom sheet');
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Title
+              Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green[700]),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Voice Translation Complete',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+
+              // Original text (if available)
+              if (originalText != null && originalText.trim().isNotEmpty) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Original Transcription:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[700],
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: Text(
+                    originalText,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
+              // Translation
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Translation (${languageNames[selectedLanguage] ?? selectedLanguage}):',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[700],
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[200]!),
+                ),
+                child: SelectableText(
+                  translatedText,
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.blue[800],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Action buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        final textToCopy = (originalText != null && originalText.trim().isNotEmpty)
+                            ? 'Original: $originalText\nTranslation: $translatedText'
+                            : translatedText;
+                        Clipboard.setData(ClipboardData(text: textToCopy));
+                        Navigator.pop(context);
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Translation copied to clipboard'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.copy),
+                      label: const Text('Copy'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _sendTranslationAsTextMessage(context, originalText, translatedText);
+                      },
+                      icon: const Icon(Icons.send),
+                      label: const Text('Send as Text'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+
 
   Future<void> _translateFileMessage(BuildContext context, Map<String, dynamic> messageData) async {
     try {

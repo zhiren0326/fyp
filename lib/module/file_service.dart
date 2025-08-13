@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
@@ -10,7 +11,11 @@ import 'package:intl/intl.dart';
 
 class FileService {
   static const String _geminiApiKey = 'AIzaSyCFdlu9A8pY0FaZEMVaZ7eL-D9XcveMufo';
-  static const String _geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+  static const String _geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+
+  // Network configuration
+  static const Duration _timeoutDuration = Duration(seconds: 60);
+  static const int _maxRetries = 3;
 
   final Map<String, String> _languageNames = {
     'en': 'English',
@@ -30,21 +35,192 @@ class FileService {
     'zh': 'Chinese',
   };
 
-  /// Translate document and return as PDF
-  Future<File?> translateDocument(PlatformFile file, String targetLanguage, String languageName) async {
+  /// Create HTTP client with proper configuration
+  http.Client _createHttpClient() {
+    final client = http.Client();
+    return client;
+  }
+
+  /// Make API request with retry logic and proper error handling
+  Future<http.Response> _makeApiRequest(String url, Map<String, dynamic> body, {int retryCount = 0}) async {
+    final client = _createHttpClient();
+
     try {
+      print('Making API request (attempt ${retryCount + 1}/$_maxRetries)');
+
+      final response = await client.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Flutter-App/1.0',
+        },
+        body: jsonEncode(body),
+      ).timeout(_timeoutDuration);
+
+      print('API Response status: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        return response;
+      } else if (response.statusCode == 429 && retryCount < _maxRetries - 1) {
+        // Rate limited, wait and retry
+        print('Rate limited, waiting before retry...');
+        await Future.delayed(Duration(seconds: (retryCount + 1) * 2));
+        return await _makeApiRequest(url, body, retryCount: retryCount + 1);
+      } else {
+        throw HttpException('API request failed with status ${response.statusCode}: ${response.body}');
+      }
+    } on SocketException catch (e) {
+      print('Socket error: $e');
+      if (retryCount < _maxRetries - 1) {
+        print('Retrying due to socket error...');
+        await Future.delayed(Duration(seconds: (retryCount + 1) * 2));
+        return await _makeApiRequest(url, body, retryCount: retryCount + 1);
+      }
+      throw SocketException('Network error: $e');
+    } on HandshakeException catch (e) {
+      print('SSL Handshake error: $e');
+      if (retryCount < _maxRetries - 1) {
+        print('Retrying due to handshake error...');
+        await Future.delayed(Duration(seconds: (retryCount + 1) * 3));
+        return await _makeApiRequest(url, body, retryCount: retryCount + 1);
+      }
+      throw HandshakeException('SSL Handshake failed: $e');
+    } on TimeoutException catch (e) {
+      print('Timeout error: $e');
+      if (retryCount < _maxRetries - 1) {
+        print('Retrying due to timeout...');
+        await Future.delayed(Duration(seconds: (retryCount + 1) * 2));
+        return await _makeApiRequest(url, body, retryCount: retryCount + 1);
+      }
+      throw TimeoutException('Request timeout: ${e.message}', e.duration);
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Enhanced document translation with fallback to text file
+  Future<File?> translateDocumentEnhanced(PlatformFile file, String targetLanguage, String languageName) async {
+    try {
+      print('Starting enhanced document translation for: ${file.name}');
+
+      // Check file size (limit to 10MB for API)
+      final fileSize = await File(file.path!).length();
+      print('File size: ${getFileSizeString(fileSize)}');
+
+      if (fileSize > 10 * 1024 * 1024) {
+        throw Exception('File too large (${getFileSizeString(fileSize)}). Maximum size: 10MB');
+      }
+
       // Extract text from the document
       String content = await _extractTextFromFile(file);
+      print('Extracted content length: ${content.length}');
 
       if (content.isEmpty) {
         throw Exception('Could not extract text from file');
       }
 
       // Translate the content
+      print('Starting translation to: $languageName');
       String translatedContent = await _translateDocumentContent(content, targetLanguage, languageName);
+      print('Translated content length: ${translatedContent.length}');
 
-      // Create PDF with translated content
-      final pdf = await _createTranslatedPDF(
+      if (translatedContent.isEmpty) {
+        throw Exception('Translation returned empty content');
+      }
+
+      // Try to create text file (always works regardless of character encoding)
+      final textFile = await createTranslatedTextFile(
+        originalFileName: file.name,
+        originalContent: content,
+        translatedContent: translatedContent,
+        targetLanguage: languageName,
+      );
+
+      print('Text file created successfully at: ${textFile.path}');
+      return textFile;
+
+    } catch (e) {
+      print('Document translation error: $e');
+      throw Exception('Failed to translate document: $e');
+    }
+  }
+
+  /// Create a simple text file as an alternative to PDF when font issues occur
+  Future<File> createTranslatedTextFile({
+    required String originalFileName,
+    required String originalContent,
+    required String translatedContent,
+    required String targetLanguage,
+  }) async {
+    final now = DateTime.now();
+    final formattedDate = DateFormat('yyyy-MM-dd HH:mm:ss').format(now);
+
+    final buffer = StringBuffer();
+    buffer.writeln('=' * 60);
+    buffer.writeln('DOCUMENT TRANSLATION');
+    buffer.writeln('=' * 60);
+    buffer.writeln();
+    buffer.writeln('Original File: $originalFileName');
+    buffer.writeln('Translated to: $targetLanguage');
+    buffer.writeln('Translation Date: $formattedDate');
+    buffer.writeln();
+    buffer.writeln('=' * 60);
+    buffer.writeln('ORIGINAL CONTENT');
+    buffer.writeln('=' * 60);
+    buffer.writeln();
+    buffer.writeln(originalContent);
+    buffer.writeln();
+    buffer.writeln('=' * 60);
+    buffer.writeln('TRANSLATED CONTENT ($targetLanguage)');
+    buffer.writeln('=' * 60);
+    buffer.writeln();
+    buffer.writeln(translatedContent);
+    buffer.writeln();
+    buffer.writeln('=' * 60);
+    buffer.writeln('Translated by AI Assistant');
+    buffer.writeln('=' * 60);
+
+    // Save as text file
+    final directory = await getTemporaryDirectory();
+    final textFile = File('${directory.path}/translated_${originalFileName.replaceAll(RegExp(r'\.[^.]*$'), '')}.txt');
+    await textFile.writeAsString(buffer.toString(), encoding: utf8);
+
+    return textFile;
+  }
+
+  /// Translate document and return as PDF (kept for backward compatibility)
+  Future<File?> translateDocument(PlatformFile file, String targetLanguage, String languageName) async {
+    // Use the enhanced version but try to create PDF
+    try {
+      print('Starting document translation for: ${file.name}');
+
+      // Check file size (limit to 10MB for API)
+      final fileSize = await File(file.path!).length();
+      print('File size: ${getFileSizeString(fileSize)}');
+
+      if (fileSize > 10 * 1024 * 1024) {
+        throw Exception('File too large (${getFileSizeString(fileSize)}). Maximum size: 10MB');
+      }
+
+      // Extract text from the document
+      String content = await _extractTextFromFile(file);
+      print('Extracted content length: ${content.length}');
+
+      if (content.isEmpty) {
+        throw Exception('Could not extract text from file');
+      }
+
+      // Translate the content
+      print('Starting translation to: $languageName');
+      String translatedContent = await _translateDocumentContent(content, targetLanguage, languageName);
+      print('Translated content length: ${translatedContent.length}');
+
+      if (translatedContent.isEmpty) {
+        throw Exception('Translation returned empty content');
+      }
+
+      // Create simple PDF with basic text only (to avoid font issues)
+      final pdf = await _createSimpleTranslatedPDF(
         originalFileName: file.name,
         originalContent: content,
         translatedContent: translatedContent,
@@ -56,6 +232,7 @@ class FileService {
       final pdfFile = File('${directory.path}/translated_${file.name.replaceAll(RegExp(r'\.[^.]*$'), '')}.pdf');
       await pdfFile.writeAsBytes(pdf);
 
+      print('PDF created successfully at: ${pdfFile.path}');
       return pdfFile;
     } catch (e) {
       print('Document translation error: $e');
@@ -67,6 +244,8 @@ class FileService {
   Future<String> _extractTextFromFile(PlatformFile file) async {
     final fileBytes = await File(file.path!).readAsBytes();
     final extension = file.extension?.toLowerCase();
+
+    print('Extracting text from ${extension?.toUpperCase()} file: ${file.name}');
 
     switch (extension) {
       case 'txt':
@@ -84,279 +263,308 @@ class FileService {
     }
   }
 
-  /// Extract text from PDF using Gemini Vision API
+  /// Extract text from PDF with multiple fallback methods
   Future<String> _extractTextFromPDF(Uint8List pdfBytes) async {
+    print('Extracting text from PDF using Gemini API');
+
+    // Check if PDF is too large
+    if (pdfBytes.length > 5 * 1024 * 1024) {
+      throw Exception('PDF file too large (${getFileSizeString(pdfBytes.length)}). Maximum size for PDF extraction: 5MB');
+    }
+
     try {
       final base64Pdf = base64Encode(pdfBytes);
+      print('PDF encoded to base64, size: ${base64Pdf.length} characters');
 
-      final response = await http.post(
-        Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=$_geminiApiKey'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'contents': [{
-            'parts': [
-              {
-                'inline_data': {
-                  'mime_type': 'application/pdf',
-                  'data': base64Pdf,
-                }
-              },
-              {
-                'text': 'Extract all the text content from this PDF document. Preserve the structure and formatting as much as possible. Only provide the extracted text, nothing else.'
+      final requestBody = {
+        'contents': [{
+          'parts': [
+            {
+              'inline_data': {
+                'mime_type': 'application/pdf',
+                'data': base64Pdf,
               }
-            ]
-          }],
-          'generationConfig': {
-            'temperature': 0.1,
-            'maxOutputTokens': 4096,
-          }
-        }),
-      );
+            },
+            {
+              'text': 'Extract all the text content from this PDF document. Preserve the structure and formatting as much as possible. Only provide the extracted text, nothing else.'
+            }
+          ]
+        }],
+        'generationConfig': {
+          'temperature': 0.1,
+          'maxOutputTokens': 4096,
+        }
+      };
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['candidates'][0]['content']['parts'][0]['text'].trim();
-      } else {
-        throw Exception('PDF text extraction failed: ${response.statusCode}');
+      final response = await _makeApiRequest('$_geminiEndpoint?key=$_geminiApiKey', requestBody);
+
+      final data = jsonDecode(response.body);
+      final extractedText = data['candidates'][0]['content']['parts'][0]['text'].trim();
+
+      if (extractedText.isEmpty || extractedText.toLowerCase().contains('cannot extract') || extractedText.toLowerCase().contains('unable to')) {
+        throw Exception('API could not extract text from PDF');
       }
+
+      print('Successfully extracted text from PDF. Length: ${extractedText.length}');
+      return extractedText;
+
     } catch (e) {
       print('PDF extraction error: $e');
-      throw Exception('Failed to extract text from PDF: $e');
+
+      // Fallback: Try simple text-based extraction
+      try {
+        print('Attempting fallback PDF text extraction...');
+        return await _fallbackPDFExtraction(pdfBytes);
+      } catch (fallbackError) {
+        print('Fallback PDF extraction also failed: $fallbackError');
+        throw Exception('Failed to extract text from PDF: $e');
+      }
     }
   }
 
-  /// Extract text from Word documents using Gemini
-  Future<String> _extractTextFromWord(Uint8List docBytes) async {
+  /// Fallback PDF text extraction method
+  Future<String> _fallbackPDFExtraction(Uint8List pdfBytes) async {
     try {
-      final base64Doc = base64Encode(docBytes);
+      // Simple text extraction by looking for readable text patterns
+      final text = utf8.decode(pdfBytes, allowMalformed: true);
+      final lines = text.split('\n');
+      final readableLines = <String>[];
 
-      final response = await http.post(
-        Uri.parse('$_geminiEndpoint?key=$_geminiApiKey'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'contents': [{
-            'parts': [{
-              'text': '''
-This is a Word document in base64 format. Please extract all the text content from it.
-Preserve the document structure and formatting as much as possible.
-Only provide the extracted text content, nothing else.
+      for (final line in lines) {
+        final cleanLine = line.replaceAll(RegExp(r'[^\x20-\x7E]'), ' ').trim();
+        if (cleanLine.length > 10 && cleanLine.contains(' ')) {
+          readableLines.add(cleanLine);
+        }
+      }
 
-Document data: $base64Doc'''
-            }]
-          }],
-          'generationConfig': {
-            'temperature': 0.1,
-            'maxOutputTokens': 4096,
-          }
-        }),
-      );
+      final extractedText = readableLines.join('\n').trim();
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['candidates'][0]['content']['parts'][0]['text'].trim();
+      if (extractedText.length > 50) {
+        print('Fallback extraction successful. Length: ${extractedText.length}');
+        return extractedText;
       } else {
-        throw Exception('Word document extraction failed: ${response.statusCode}');
+        throw Exception('Insufficient readable text found in PDF');
       }
     } catch (e) {
+      throw Exception('Fallback PDF extraction failed: $e');
+    }
+  }
+
+  /// Extract text from Word documents
+  Future<String> _extractTextFromWord(Uint8List docBytes) async {
+    print('Extracting text from Word document');
+
+    // Check if file is too large
+    if (docBytes.length > 5 * 1024 * 1024) {
+      throw Exception('Word document too large (${getFileSizeString(docBytes.length)}). Maximum size: 5MB');
+    }
+
+    try {
+      final base64Doc = base64Encode(docBytes);
+      print('Word document encoded to base64, size: ${base64Doc.length} characters');
+
+      final requestBody = {
+        'contents': [{
+          'parts': [
+            {
+              'inline_data': {
+                'mime_type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'data': base64Doc,
+              }
+            },
+            {
+              'text': 'Extract all the text content from this Word document. Preserve the document structure and formatting as much as possible. Only provide the extracted text content, nothing else.'
+            }
+          ]
+        }],
+        'generationConfig': {
+          'temperature': 0.1,
+          'maxOutputTokens': 4096,
+        }
+      };
+
+      final response = await _makeApiRequest('$_geminiEndpoint?key=$_geminiApiKey', requestBody);
+
+      final data = jsonDecode(response.body);
+      final extractedText = data['candidates'][0]['content']['parts'][0]['text'].trim();
+
+      if (extractedText.isNotEmpty && !extractedText.toLowerCase().contains('cannot') && !extractedText.toLowerCase().contains('unable')) {
+        print('Successfully extracted text from Word document. Length: ${extractedText.length}');
+        return extractedText;
+      }
+
+      // If API extraction failed, try fallback
+      print('API extraction failed, trying fallback method');
+      return await _fallbackWordExtraction(docBytes);
+
+    } catch (e) {
       print('Word extraction error: $e');
-      // Fallback: try to read as plain text
+
       try {
-        return utf8.decode(docBytes);
-      } catch (_) {
+        return await _fallbackWordExtraction(docBytes);
+      } catch (fallbackError) {
+        print('Fallback Word extraction also failed: $fallbackError');
         throw Exception('Failed to extract text from Word document: $e');
       }
+    }
+  }
+
+  /// Fallback Word document text extraction
+  Future<String> _fallbackWordExtraction(Uint8List docBytes) async {
+    try {
+      print('Attempting fallback Word text extraction...');
+
+      final textContent = utf8.decode(docBytes, allowMalformed: true);
+      final cleanedText = textContent
+          .replaceAll(RegExp(r'[^\x20-\x7E\n\r\t]'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+
+      if (cleanedText.isNotEmpty && cleanedText.length > 50) {
+        print('Fallback text extraction successful. Length: ${cleanedText.length}');
+        return cleanedText;
+      } else {
+        throw Exception('Could not extract readable text from Word document');
+      }
+    } catch (e) {
+      throw Exception('Fallback Word extraction failed: $e');
     }
   }
 
   /// Translate document content using Gemini
   Future<String> _translateDocumentContent(String content, String targetLanguage, String languageName) async {
     try {
-      final response = await http.post(
-        Uri.parse('$_geminiEndpoint?key=$_geminiApiKey'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'contents': [{
-            'parts': [{
-              'text': '''
-You are a professional document translator. Translate the following document content to $languageName.
+      print('Translating content to $languageName. Content length: ${content.length}');
 
-Instructions:
-- Maintain the document structure and formatting
-- Preserve technical terms appropriately 
-- Keep the professional tone
-- Ensure cultural appropriateness
-- Only provide the translated content, nothing else
-
-Document content to translate:
-$content
-
-Translated document:'''
-            }]
-          }],
-          'generationConfig': {
-            'temperature': 0.2,
-            'topK': 40,
-            'topP': 0.95,
-            'maxOutputTokens': 4096,
-          }
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['candidates'][0]['content']['parts'][0]['text'].trim();
-      } else {
-        throw Exception('Translation failed: ${response.statusCode}');
+      // Truncate content if it's too long to avoid token limits
+      String contentToTranslate = content;
+      if (content.length > 8000) {
+        contentToTranslate = content.substring(0, 8000) + '\n\n[Content truncated due to length...]';
+        print('Content truncated to avoid token limits');
       }
+
+      final requestBody = {
+        'contents': [{
+          'parts': [{
+            'text': 'You are a professional document translator. Translate the following document content to $languageName.\n\nInstructions:\n- Maintain the document structure and formatting\n- Preserve technical terms appropriately\n- Keep the professional tone\n- Ensure cultural appropriateness\n- Only provide the translated content, nothing else\n\nDocument content to translate:\n$contentToTranslate\n\nTranslated document:'
+          }]
+        }],
+        'generationConfig': {
+          'temperature': 0.2,
+          'topK': 40,
+          'topP': 0.95,
+          'maxOutputTokens': 4096,
+        }
+      };
+
+      final response = await _makeApiRequest('$_geminiEndpoint?key=$_geminiApiKey', requestBody);
+
+      final data = jsonDecode(response.body);
+      final translatedText = data['candidates'][0]['content']['parts'][0]['text'].trim();
+
+      // Clean up the translation response
+      String cleanedTranslation = _cleanTranslationResponse(translatedText);
+
+      if (cleanedTranslation.isEmpty) {
+        throw Exception('Translation returned empty content');
+      }
+
+      print('Translation successful. Translated length: ${cleanedTranslation.length}');
+      return cleanedTranslation;
+
     } catch (e) {
       print('Translation error: $e');
       throw Exception('Failed to translate content: $e');
     }
   }
 
-  /// Create a professional PDF with translated content
-  Future<Uint8List> _createTranslatedPDF({
+  /// Clean translation response by removing common prefixes/suffixes
+  String _cleanTranslationResponse(String response) {
+    String cleaned = response.trim();
+
+    // Remove common prefixes
+    final prefixes = [
+      'Translation:',
+      'Translated text:',
+      'Here is the translation:',
+      'The translation is:',
+      'Translate:',
+      'Result:',
+      'Translated document:',
+      'Document translation:',
+    ];
+
+    for (String prefix in prefixes) {
+      if (cleaned.toLowerCase().startsWith(prefix.toLowerCase())) {
+        cleaned = cleaned.substring(prefix.length).trim();
+      }
+    }
+
+    // Remove quotes if the entire response is quoted
+    if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+      cleaned = cleaned.substring(1, cleaned.length - 1);
+    }
+
+    if (cleaned.startsWith("'") && cleaned.endsWith("'")) {
+      cleaned = cleaned.substring(1, cleaned.length - 1);
+    }
+
+    return cleaned.trim();
+  }
+
+  /// Create a simple PDF with basic text formatting (avoids font issues)
+  Future<Uint8List> _createSimpleTranslatedPDF({
     required String originalFileName,
     required String originalContent,
     required String translatedContent,
     required String targetLanguage,
   }) async {
+    print('Creating simple PDF to avoid font issues');
+
     final pdf = pw.Document();
     final now = DateTime.now();
     final formattedDate = DateFormat('yyyy-MM-dd HH:mm:ss').format(now);
 
-    // Add pages to PDF
+    // Convert non-ASCII characters to ASCII equivalents for PDF
+    final safeOriginal = _convertToSafeText(originalContent);
+    final safeTranslated = _convertToSafeText(translatedContent);
+
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(32),
         build: (pw.Context context) {
           return [
-            // Header
-            pw.Container(
-              padding: const pw.EdgeInsets.only(bottom: 20),
-              decoration: const pw.BoxDecoration(
-                border: pw.Border(
-                  bottom: pw.BorderSide(width: 2, color: PdfColors.teal),
-                ),
-              ),
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(
-                    'Document Translation',
-                    style: pw.TextStyle(
-                      fontSize: 24,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.teal,
-                    ),
-                  ),
-                  pw.SizedBox(height: 8),
-                  pw.Text(
-                    'Original File: $originalFileName',
-                    style: pw.TextStyle(
-                      fontSize: 12,
-                      color: PdfColors.grey700,
-                    ),
-                  ),
-                  pw.Text(
-                    'Translated to: $targetLanguage',
-                    style: pw.TextStyle(
-                      fontSize: 12,
-                      color: PdfColors.grey700,
-                    ),
-                  ),
-                  pw.Text(
-                    'Translation Date: $formattedDate',
-                    style: pw.TextStyle(
-                      fontSize: 12,
-                      color: PdfColors.grey700,
-                    ),
-                  ),
-                ],
-              ),
+            pw.Text(
+              'Document Translation',
+              style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
             ),
-
+            pw.SizedBox(height: 10),
+            pw.Text('Original File: $originalFileName'),
+            pw.Text('Translated to: $targetLanguage'),
+            pw.Text('Translation Date: $formattedDate'),
             pw.SizedBox(height: 20),
-
-            // Original Content Section
-            pw.Container(
-              padding: const pw.EdgeInsets.all(16),
-              decoration: pw.BoxDecoration(
-                color: PdfColors.grey100,
-                borderRadius: pw.BorderRadius.circular(8),
-              ),
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(
-                    'Original Content',
-                    style: pw.TextStyle(
-                      fontSize: 16,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.grey800,
-                    ),
-                  ),
-                  pw.SizedBox(height: 12),
-                  pw.Text(
-                    originalContent,
-                    style: pw.TextStyle(
-                      fontSize: 11,
-                      color: PdfColors.grey700,
-                      lineSpacing: 1.4,
-                    ),
-                  ),
-                ],
-              ),
+            pw.Text(
+              'Original Content',
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
             ),
-
+            pw.SizedBox(height: 10),
+            pw.Text(safeOriginal),
             pw.SizedBox(height: 20),
-
-            // Translated Content Section
-            pw.Container(
-              padding: const pw.EdgeInsets.all(16),
-              decoration: pw.BoxDecoration(
-                color: PdfColors.teal50,
-                borderRadius: pw.BorderRadius.circular(8),
-                border: pw.Border.all(color: PdfColors.teal200),
-              ),
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(
-                    'Translated Content ($targetLanguage)',
-                    style: pw.TextStyle(
-                      fontSize: 16,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.teal800,
-                    ),
-                  ),
-                  pw.SizedBox(height: 12),
-                  pw.Text(
-                    translatedContent,
-                    style: pw.TextStyle(
-                      fontSize: 12,
-                      color: PdfColors.black,
-                      lineSpacing: 1.5,
-                    ),
-                  ),
-                ],
-              ),
+            pw.Text(
+              'Translated Content ($targetLanguage)',
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
             ),
+            pw.SizedBox(height: 10),
+            pw.Text(safeTranslated),
+            if (safeTranslated != translatedContent) ...[
+              pw.SizedBox(height: 10),
+              pw.Text(
+                'Note: Some characters were converted to ASCII equivalents for PDF compatibility.',
+                style: pw.TextStyle(fontSize: 8, fontStyle: pw.FontStyle.italic),
+              ),
+            ],
           ];
-        },
-        footer: (pw.Context context) {
-          return pw.Container(
-            alignment: pw.Alignment.center,
-            margin: const pw.EdgeInsets.only(top: 16),
-            child: pw.Text(
-              'Page ${context.pageNumber} of ${context.pagesCount} | Translated by AI Assistant',
-              style: pw.TextStyle(
-                fontSize: 10,
-                color: PdfColors.grey600,
-              ),
-            ),
-          );
         },
       ),
     );
@@ -364,47 +572,90 @@ Translated document:'''
     return pdf.save();
   }
 
-  /// Translate voice message
+  /// Convert text to safe ASCII characters for PDF
+  String _convertToSafeText(String text) {
+    String safeText = text;
+
+    // Replace common non-ASCII characters with ASCII equivalents
+    final replacements = {
+      // Chinese characters
+      RegExp(r'[\u4e00-\u9fff]'): '[Chinese]',
+      // Arabic characters
+      RegExp(r'[\u0600-\u06ff]'): '[Arabic]',
+      // Japanese characters
+      RegExp(r'[\u3040-\u309f\u30a0-\u30ff]'): '[Japanese]',
+      // Korean characters
+      RegExp(r'[\uac00-\ud7af]'): '[Korean]',
+      // Thai characters
+      RegExp(r'[\u0e00-\u0e7f]'): '[Thai]',
+      // Vietnamese characters
+      RegExp(r'[àáảãạăắằẳẵặâấầẩẫậ]'): 'a',
+      RegExp(r'[èéẻẽẹêếềểễệ]'): 'e',
+      RegExp(r'[ìíỉĩị]'): 'i',
+      RegExp(r'[òóỏõọôốồổỗộơớờởỡợ]'): 'o',
+      RegExp(r'[ùúủũụưứừửữự]'): 'u',
+      RegExp(r'[ỳýỷỹỵ]'): 'y',
+      // Special Vietnamese characters
+      RegExp(r'đ'): 'd',
+      RegExp(r'Đ'): 'D',
+    };
+
+    for (final entry in replacements.entries) {
+      safeText = safeText.replaceAll(entry.key, entry.value);
+    }
+
+    // Replace any remaining non-ASCII characters
+    safeText = safeText.replaceAll(RegExp(r'[^\x00-\x7F]'), '?');
+
+    return safeText;
+  }
+
+  /// Translate voice message with multimodal support
   Future<Map<String, String>?> translateVoiceMessage(String voicePath, String targetLanguage, String languageName) async {
     try {
+      print('Translating voice message: $voicePath');
+
       // Read voice file
       final voiceBytes = await File(voicePath).readAsBytes();
-      final base64Audio = base64Encode(voiceBytes);
 
-      // Use Gemini to transcribe and translate
-      final response = await http.post(
-        Uri.parse('$_geminiEndpoint?key=$_geminiApiKey'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'contents': [{
-            'parts': [{
-              'text': '''
-You are an expert audio transcription and translation service.
-
-Task: Transcribe the audio content and translate it to $languageName.
-
-Please provide the response in this exact format:
-ORIGINAL: [transcribed text in original language]
-TRANSLATION: [translated text in $languageName]
-
-Audio data: $base64Audio'''
-            }]
-          }],
-          'generationConfig': {
-            'temperature': 0.3,
-            'maxOutputTokens': 1024,
-          }
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final result = data['candidates'][0]['content']['parts'][0]['text'];
-
-        return _parseVoiceTranslationResponse(result);
-      } else {
-        throw Exception('Voice translation failed: ${response.statusCode}');
+      // Check file size
+      if (voiceBytes.length > 5 * 1024 * 1024) {
+        throw Exception('Audio file too large (${getFileSizeString(voiceBytes.length)}). Maximum size: 5MB');
       }
+
+      final base64Audio = base64Encode(voiceBytes);
+      final extension = voicePath.split('.').last.toLowerCase();
+      final mimeType = getMimeType(extension);
+
+      print('Voice file mime type: $mimeType, size: ${getFileSizeString(voiceBytes.length)}');
+
+      final requestBody = {
+        'contents': [{
+          'parts': [
+            {
+              'inline_data': {
+                'mime_type': mimeType,
+                'data': base64Audio,
+              }
+            },
+            {
+              'text': 'You are an expert audio transcription and translation service.\n\nTask: Transcribe the audio content and translate it to $languageName.\n\nPlease provide the response in this exact format:\nORIGINAL: [transcribed text in original language]\nTRANSLATION: [translated text in $languageName]'
+            }
+          ]
+        }],
+        'generationConfig': {
+          'temperature': 0.3,
+          'maxOutputTokens': 1024,
+        }
+      };
+
+      final response = await _makeApiRequest('$_geminiEndpoint?key=$_geminiApiKey', requestBody);
+
+      final data = jsonDecode(response.body);
+      final result = data['candidates'][0]['content']['parts'][0]['text'];
+
+      return _parseVoiceTranslationResponse(result);
+
     } catch (e) {
       print('Voice translation error: $e');
       return null;
@@ -539,7 +790,7 @@ Audio data: $base64Audio'''
             ),
             pw.SizedBox(height: 20),
             pw.Text(
-              content,
+              _convertToSafeText(content),
               style: const pw.TextStyle(
                 fontSize: 12,
                 lineSpacing: 1.4,

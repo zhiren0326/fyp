@@ -10,6 +10,7 @@ import 'package:fyp/Reward%20Module/RewardPage.dart';
 import 'package:fyp/SetttingsPage/account.dart';
 import 'package:fyp/module/ActivityLog.dart';
 import 'package:fyp/module/Chat.dart';
+import 'package:fyp/module/GeminiChatbotPage.dart';
 import '../../Login With Google/google_auth.dart';
 import 'login.dart';
 
@@ -183,6 +184,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               color: Colors.white,
               tooltip: 'View Your Tasks',
             ),
+          IconButton(
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const GeminiChatbotPage(),
+                ),
+              );
+            },
+            color: Colors.white,
+            tooltip: 'AI Assistant',
+          ),
           IconButton(
             icon: const Icon(Icons.notifications),
             onPressed: () {
