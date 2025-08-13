@@ -1,9 +1,9 @@
-// Updated WeeklySummaryPage.dart - Using UserDataService for user-specific data
+// Updated WeeklySummaryPage.dart - Removed user level references and fixed data fetching
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'UserDataService.dart'; // Import the new service
+import 'UserDataService.dart'; // Import the updated service
 
 class WeeklySummaryPage extends StatefulWidget {
   final Map<String, dynamic>? summaryData;
@@ -98,7 +98,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
         return;
       }
 
-      // Use the new service to generate user-specific summary
+      // Use the updated service to generate user-specific summary
       final summaryData = await UserDataService.generateWeeklySummaryForUser(
         userId: _currentUserId!,
         weekStart: _selectedWeekStart,
@@ -110,7 +110,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
         _isLoading = false;
       });
 
-      print('Weekly summary loaded successfully: ${summaryData['totalTasks']} tasks, ${summaryData['totalPoints']} points');
+      print('Weekly summary loaded successfully: ${summaryData['totalTasks']} tasks, ${summaryData['totalPoints']} points, ${summaryData['userName']}');
 
     } catch (e) {
       print('Error loading weekly summary: $e');
@@ -239,6 +239,86 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                 valueColor: AlwaysStoppedAnimation<Color>(color),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUserProfileHeader() {
+    if (_summaryData == null) return const SizedBox.shrink();
+
+    final profileData = _summaryData!['profileData'] as Map<String, dynamic>?;
+    final userName = _summaryData!['userName'] as String? ?? 'User';
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF006D77), Color(0xFF00838F)],
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: Colors.white.withOpacity(0.2),
+                  child: Text(
+                    userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$userName\'s Weekly Summary',
+                        style: GoogleFonts.poppins(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      Text(
+                        _formatWeekRange(_selectedWeekStart),
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Overall Completion: ${(_summaryData!['completionRate'] as double? ?? 0.0).toStringAsFixed(1)}%',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.white.withOpacity(0.9),
+              ),
+            ),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: (_summaryData!['completionRate'] as double? ?? 0.0) / 100,
+              backgroundColor: Colors.white.withOpacity(0.3),
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
           ],
         ),
       ),
@@ -543,7 +623,6 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
     final totalTasks = day['totalTasks'] as int? ?? 0;
     final points = day['points'] as int? ?? 0;
     final earnings = day['earnings'] as double? ?? 0.0;
-    final translations = day['translations'] as int? ?? 0;
     final completionRate = day['completionRate'] as double? ?? 0.0;
 
     return Container(
@@ -601,15 +680,6 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                     ),
                   ),
                 ],
-                if (translations > 0) ...[
-                  Text(
-                    '$translations translations',
-                    style: GoogleFonts.poppins(
-                      fontSize: 10,
-                      color: Colors.blue[600],
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
@@ -657,16 +727,16 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
     final mostProductiveDay = _summaryData!['mostProductiveDay'] as String? ?? 'N/A';
     final totalPoints = _summaryData!['totalPoints'] as int? ?? 0;
     final totalEarnings = _summaryData!['totalEarnings'] as double? ?? 0.0;
-    final translationsCount = _summaryData!['translationsCount'] as int? ?? 0;
+    final userName = _summaryData!['userName'] as String? ?? 'User';
 
     String performanceEmoji = completionRate >= 90 ? '🏆' :
     completionRate >= 70 ? '🌟' :
     completionRate >= 50 ? '👍' : '💪';
 
-    String motivationalMessage = completionRate >= 90 ? 'Excellent work this week!' :
-    completionRate >= 70 ? 'Great progress this week!' :
-    completionRate >= 50 ? 'Good effort, keep it up!' :
-    'Every step counts, keep going!';
+    String motivationalMessage = completionRate >= 90 ? '$userName, excellent work this week!' :
+    completionRate >= 70 ? '$userName, great progress this week!' :
+    completionRate >= 50 ? '$userName, good effort, keep it up!' :
+    '$userName, every step counts, keep going!';
 
     return Card(
       elevation: 2,
@@ -719,8 +789,6 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
             _buildInsightRow('Total points earned', '$totalPoints points'),
             _buildInsightRow('Total earnings', 'RM${totalEarnings.toStringAsFixed(2)}'),
             _buildInsightRow('Average daily earnings', 'RM${averageDailyEarnings.toStringAsFixed(2)}'),
-            if (translationsCount > 0)
-              _buildInsightRow('Translations completed', '$translationsCount translations'),
           ],
         ),
       ),
@@ -900,6 +968,15 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                             color: Colors.grey[700],
                           ),
                         ),
+                        const Spacer(),
+                        Text(
+                          'Data Source: pointsHistory + moneyHistory + profiledetails',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            color: Colors.grey[500],
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -907,52 +984,8 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
 
               const SizedBox(height: 16),
 
-              // Week Header
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFF006D77), Color(0xFF00838F)],
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _formatWeekRange(_selectedWeekStart),
-                        style: GoogleFonts.poppins(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (_summaryData != null) ...[
-                        Text(
-                          'Overall Completion: ${(_summaryData!['completionRate'] as double? ?? 0.0).toStringAsFixed(1)}%',
-                          style: GoogleFonts.poppins(
-                            fontSize: 14,
-                            color: Colors.white.withOpacity(0.9),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        LinearProgressIndicator(
-                          value: (_summaryData!['completionRate'] as double? ?? 0.0) / 100,
-                          backgroundColor: Colors.white.withOpacity(0.3),
-                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
+              // User Profile Header
+              _buildUserProfileHeader(),
 
               const SizedBox(height: 20),
 
@@ -1044,7 +1077,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                         const SizedBox(height: 8),
                         Text(
                           _currentUserId != null
-                              ? 'User: ${_currentUserId!.substring(0, 8)}...'
+                              ? 'User: ${_currentUserId!.substring(0, 8)}...\nChecking: pointsHistory, moneyHistory, and profiledetails'
                               : 'No user logged in',
                           style: GoogleFonts.poppins(
                             fontSize: 12,

@@ -4,7 +4,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fyp/Add%20Job%20Module/AddJobPage.dart';
 import 'package:fyp/Task%20Progress/TaskProgressPage.dart';
 import '../Add Job Module/RecurringTaskScheduler.dart';
-import '../Add Job Module/TaskDependenciesManager.dart';
 import '../Add%20Job%20Module/JobDetailPage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
@@ -347,6 +346,21 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
     );
   }
 
+  Color _getPriorityColor(String priority) {
+    switch (priority.toLowerCase()) {
+      case 'low':
+        return Colors.green;
+      case 'medium':
+        return Colors.orange;
+      case 'high':
+        return Colors.red;
+      case 'critical':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
+  }
+
   Future<void> _performDeleteJob(String jobId, String jobTitle) async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
@@ -419,15 +433,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
           MaterialPageRoute(
             builder: (context) => TaskProgressPage(),
           ),
-        ),
-      },
-      {
-        'title': 'Dependencies',
-        'icon': Icons.account_tree,
-        'color': Colors.green,
-        'onTap': () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => const TaskDependenciesManager()),
         ),
       },
       {
@@ -899,8 +904,26 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                       style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87),
                                     ),
                                   ),
+                                  // Add priority badge
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: _getPriorityColor(data['priority'] ?? 'Medium').withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: _getPriorityColor(data['priority'] ?? 'Medium')),
+                                    ),
+                                    child: Text(
+                                      data['priority'] ?? 'Medium',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 10,
+                                        color: _getPriorityColor(data['priority'] ?? 'Medium'),
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
                                   if (isRecurringInstance)
                                     Container(
+                                      margin: const EdgeInsets.only(left: 4),
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                       decoration: BoxDecoration(
                                         color: Colors.purple.withOpacity(0.1),

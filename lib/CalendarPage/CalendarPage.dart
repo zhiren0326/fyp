@@ -47,6 +47,8 @@ class _CalendarPageState extends State<CalendarPage> {
     if (user != null) {
       try {
         final now = dateOnly(DateTime.now().toLocal());
+
+        // Load jobs where user is accepted
         final jobSnapshot = await FirebaseFirestore.instance
             .collection('jobs')
             .where('acceptedApplicants', arrayContains: user.uid)
@@ -54,6 +56,7 @@ class _CalendarPageState extends State<CalendarPage> {
             .limit(50)
             .get();
 
+        // Load regular tasks
         final taskSnapshot = await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
@@ -64,58 +67,101 @@ class _CalendarPageState extends State<CalendarPage> {
 
         setState(() {
           _tasks = {};
-          for (var doc in jobSnapshot.docs) {
-            final data = doc.data();
-            final startDate = data['startDate'] != null
-                ? dateOnly(DateTime.parse(data['startDate']).toLocal())
-                : now;
-            final isShortTerm = data['isShortTerm'] == true;
-            final endDate = isShortTerm && data['endDate'] != null
-                ? dateOnly(DateTime.parse(data['endDate']).toLocal())
-                : startDate;
-
-            final task = Task(
-              id: doc.id,
-              title: data['jobPosition'] ?? 'Unnamed Job',
-              isTimeBlocked: data['isTimeBlocked'] ?? false,
-              startTime: _parseTimeOfDay(data['startTime'] ?? '12:00 AM'),
-              endTime: _parseTimeOfDay(data['endTime'] ?? '1:00 AM'),
-              jobId: doc.id,
-              priority: _parsePriority(data['priority']),
-              estimatedDuration: data['estimatedDuration'] ?? 60,
-              category: data['category'] ?? 'Work',
-            );
-
-            if (!isShortTerm) {
-              _tasks.putIfAbsent(startDate, () => []).add(task);
-            } else {
-              DateTime currentDate = startDate;
-              while (currentDate.isBefore(endDate) || currentDate.isAtSameMomentAs(endDate)) {
-                if (!currentDate.isBefore(now)) {
-                  _tasks.putIfAbsent(currentDate, () => []).add(task);
-                }
-                currentDate = currentDate.add(const Duration(days: 1));
-              }
-            }
-          }
-
-          for (var doc in taskSnapshot.docs) {
-            final data = doc.data();
-            final date = dateOnly(DateTime.parse(data['date']));
-            final tasksData = data['tasks'] as List<dynamic>? ?? [];
-            for (var taskData in tasksData) {
-              final task = Task.fromMap(taskData);
-              _tasks.putIfAbsent(date, () => []).add(task);
-            }
-          }
-
-          print('Loaded ${jobSnapshot.docs.length} jobs and ${taskSnapshot.docs.length} tasks for user ${user.uid}');
         });
+
+        // Process jobs with completion status check
+        await _processJobsWithCompletion(jobSnapshot.docs, user.uid, now);
+
+        // Process regular tasks
+        for (var doc in taskSnapshot.docs) {
+          final data = doc.data();
+          final date = dateOnly(DateTime.parse(data['date']));
+          final tasksData = data['tasks'] as List<dynamic>? ?? [];
+          for (var taskData in tasksData) {
+            final task = Task.fromMap(taskData);
+            _tasks.putIfAbsent(date, () => []).add(task);
+          }
+        }
+
+        setState(() {});
+        print('Loaded ${jobSnapshot.docs.length} jobs and ${taskSnapshot.docs.length} tasks for user ${user.uid}');
       } catch (e) {
         print('Error loading tasks: $e');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to load tasks: $e')),
         );
+      }
+    }
+  }
+
+  Future<void> _processJobsWithCompletion(List<QueryDocumentSnapshot> jobDocs, String userId, DateTime now) async {
+    for (var doc in jobDocs) {
+      try {
+        final data = doc.data() as Map<String, dynamic>;
+        final jobId = doc.id;
+
+        // Parse dates
+        final startDate = data['startDate'] != null
+            ? dateOnly(DateTime.parse(data['startDate']).toLocal())
+            : now;
+        final isShortTerm = data['isShortTerm'] == true;
+        final endDate = isShortTerm && data['endDate'] != null
+            ? dateOnly(DateTime.parse(data['endDate']).toLocal())
+            : startDate;
+
+        // Check job completion status from taskProgress
+        final taskProgressDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('taskProgress')
+            .doc(jobId)
+            .get();
+
+        bool isJobCompleted = false;
+        String jobStatus = 'created';
+
+        if (taskProgressDoc.exists) {
+          final progressData = taskProgressDoc.data()!;
+          isJobCompleted = progressData['completionApproved'] == true;
+          jobStatus = progressData['status'] ?? 'created';
+
+          // Also check if status is 'completed'
+          if (jobStatus.toLowerCase() == 'completed') {
+            isJobCompleted = true;
+          }
+        }
+
+        // Create task object from job
+        final task = Task(
+          id: 'job_$jobId',
+          title: data['jobPosition'] ?? 'Unnamed Job',
+          description: data['description'] ?? '',
+          isTimeBlocked: data['isTimeBlocked'] ?? false,
+          startTime: _parseTimeOfDay(data['startTime'] ?? '9:00 AM'),
+          endTime: _parseTimeOfDay(data['endTime'] ?? '10:00 AM'),
+          jobId: jobId,
+          priority: _parsePriority(data['priority']),
+          estimatedDuration: (data['estimatedDuration'] ?? 60).toInt(),
+          category: 'Work',
+          isCompleted: isJobCompleted, // Set completion status
+        );
+
+        // Add task to appropriate dates
+        if (!isShortTerm) {
+          _tasks.putIfAbsent(startDate, () => []).add(task);
+        } else {
+          DateTime currentDate = startDate;
+          while (currentDate.isBefore(endDate) || currentDate.isAtSameMomentAs(endDate)) {
+            if (!currentDate.isBefore(now)) {
+              _tasks.putIfAbsent(currentDate, () => []).add(task);
+            }
+            currentDate = currentDate.add(const Duration(days: 1));
+          }
+        }
+
+        print('Job ${data['jobPosition']} - Status: $jobStatus, Completed: $isJobCompleted');
+      } catch (e) {
+        print('Error processing job ${doc.id}: $e');
       }
     }
   }
@@ -191,7 +237,7 @@ class _CalendarPageState extends State<CalendarPage> {
       return TimeOfDay(hour: hour, minute: minute);
     } catch (e) {
       print('Error parsing time: $timeStr, $e');
-      return TimeOfDay(hour: 0, minute: 0);
+      return const TimeOfDay(hour: 9, minute: 0);
     }
   }
 
@@ -358,8 +404,13 @@ class _CalendarPageState extends State<CalendarPage> {
       );
     }
 
-    // Sort tasks by priority and time
+    // Sort tasks by completion status (incomplete first), then priority and time
     dailyTasks.sort((a, b) {
+      // Completed tasks go to the end
+      if (a.isCompleted != b.isCompleted) {
+        return a.isCompleted ? 1 : -1;
+      }
+
       final priorityComparison = b.priority.index.compareTo(a.priority.index);
       if (priorityComparison != 0) return priorityComparison;
 
@@ -386,77 +437,143 @@ class _CalendarPageState extends State<CalendarPage> {
         ? Colors.orange
         : Colors.green;
 
+    final isJobTask = task.id.startsWith('job_');
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
-      child: ListTile(
-        leading: Container(
-          width: 4,
-          height: double.infinity,
-          decoration: BoxDecoration(
-            color: priorityColor,
-            borderRadius: BorderRadius.circular(2),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: task.isCompleted ? Colors.grey[100] : null,
+        ),
+        child: ListTile(
+          leading: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 4,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: task.isCompleted ? Colors.grey : priorityColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (task.isCompleted)
+                const Icon(Icons.check_circle, color: Colors.green, size: 24)
+              else
+                Icon(Icons.radio_button_unchecked, color: Colors.grey[400], size: 24),
+            ],
           ),
-        ),
-        title: Text(
-          task.title,
-          style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (task.isTimeBlocked)
-              Text(
-                '${task.startTime.format(context)} - ${task.endTime.format(context)}',
-                style: GoogleFonts.poppins(color: Colors.teal),
-              )
-            else
-              Text(
-                'No time block assigned',
-                style: GoogleFonts.poppins(color: Colors.grey),
-              ),
-            Text(
-              '${task.category} • ${task.estimatedDuration} min • ${task.priority.name.toUpperCase()}',
-              style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
-            ),
-          ],
-        ),
-        trailing: PopupMenuButton<String>(
-          onSelected: (value) {
-            switch (value) {
-              case 'timeBlock':
-                _navigateToTimeBlocking();
-                break;
-              case 'pomodoro':
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => PomodoroTimerPage(tasks: [task]),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  task.title,
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600,
+                    decoration: task.isCompleted ? TextDecoration.lineThrough : null,
+                    color: task.isCompleted ? Colors.grey[600] : null,
                   ),
-                );
-                break;
-            }
-          },
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'timeBlock',
-              child: Row(
-                children: [
-                  Icon(Icons.schedule, size: 16),
-                  SizedBox(width: 8),
-                  Text('Time Block'),
-                ],
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'pomodoro',
-              child: Row(
-                children: [
-                  Icon(Icons.timer, size: 16),
-                  SizedBox(width: 8),
-                  Text('Start Pomodoro'),
-                ],
+              if (isJobTask)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: task.isCompleted ? Colors.grey[300] : Colors.blue[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'JOB',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: task.isCompleted ? Colors.grey[600] : Colors.blue[700],
+                    ),
+                  ),
+                ),
+              if (task.isCompleted)
+                Container(
+                  margin: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.green[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'COMPLETED',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green[700],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (task.isTimeBlocked)
+                Text(
+                  '${task.startTime.format(context)} - ${task.endTime.format(context)}',
+                  style: GoogleFonts.poppins(
+                    color: task.isCompleted ? Colors.grey[500] : Colors.teal,
+                  ),
+                )
+              else
+                Text(
+                  'No time block assigned',
+                  style: GoogleFonts.poppins(color: Colors.grey),
+                ),
+              Text(
+                '${task.category} • ${task.estimatedDuration} min • ${task.priority.name.toUpperCase()}',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: task.isCompleted ? Colors.grey[500] : Colors.grey[600],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
+          trailing: task.isCompleted ? null : PopupMenuButton<String>(
+            onSelected: (value) {
+              switch (value) {
+                case 'timeBlock':
+                  _navigateToTimeBlocking();
+                  break;
+                case 'pomodoro':
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => PomodoroTimerPage(tasks: [task]),
+                    ),
+                  );
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'timeBlock',
+                child: Row(
+                  children: [
+                    Icon(Icons.schedule, size: 16),
+                    SizedBox(width: 8),
+                    Text('Time Block'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'pomodoro',
+                child: Row(
+                  children: [
+                    Icon(Icons.timer, size: 16),
+                    SizedBox(width: 8),
+                    Text('Start Pomodoro'),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -572,13 +689,13 @@ class _CalendarPageState extends State<CalendarPage> {
                   return [...tasks, ...timeBlocks];
                 },
                 calendarStyle: CalendarStyle(
-                  todayDecoration: BoxDecoration(color: Colors.teal, shape: BoxShape.circle),
+                  todayDecoration: const BoxDecoration(color: Colors.teal, shape: BoxShape.circle),
                   selectedDecoration: BoxDecoration(color: Colors.teal[700], shape: BoxShape.circle),
                   todayTextStyle: GoogleFonts.poppins(color: Colors.white),
                   selectedTextStyle: GoogleFonts.poppins(color: Colors.white),
                   defaultTextStyle: GoogleFonts.poppins(color: Colors.black87),
                   markersAlignment: Alignment.bottomRight,
-                  markerDecoration: BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+                  markerDecoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
                 ),
                 headerStyle: HeaderStyle(
                   formatButtonDecoration: BoxDecoration(

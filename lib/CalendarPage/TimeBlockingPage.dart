@@ -24,6 +24,7 @@ class TimeBlockingPage extends StatefulWidget {
 class _TimeBlockingPageState extends State<TimeBlockingPage> {
   List<TimeBlock> _timeBlocks = [];
   List<Task> _unscheduledTasks = [];
+  List<Task> _completedTasks = [];
   bool _isLoading = true;
   final ScrollController _scrollController = ScrollController();
 
@@ -46,8 +47,13 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
   @override
   void initState() {
     super.initState();
-    _unscheduledTasks = List.from(widget.tasks);
+    _separateTasksByCompletion();
     _loadTimeBlocks();
+  }
+
+  void _separateTasksByCompletion() {
+    _unscheduledTasks = widget.tasks.where((task) => !task.isCompleted).toList();
+    _completedTasks = widget.tasks.where((task) => task.isCompleted).toList();
   }
 
   Future<void> _loadTimeBlocks() async {
@@ -69,7 +75,7 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
               .map((doc) => TimeBlock.fromMap(doc.data()))
               .toList();
 
-          // Remove tasks that are already scheduled
+          // Remove tasks that are already scheduled from unscheduled list (but not completed)
           _unscheduledTasks.removeWhere((task) =>
               _timeBlocks.any((block) => block.taskIds.contains(task.id)));
 
@@ -161,9 +167,9 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
       builder: (context) => _TimeBlockDialog(
         initialStartTime: slot.startTime,
         initialEndTime: slot.endTime,
-        availableTasks: _unscheduledTasks,
+        availableTasks: _unscheduledTasks, // Only non-completed tasks
         colors: _blockColors,
-        selectedDate: widget.selectedDate, // Add this parameter
+        selectedDate: widget.selectedDate,
         onSave: (timeBlock) {
           setState(() {
             _timeBlocks.add(timeBlock);
@@ -187,17 +193,17 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
         initialColor: block.color,
         initialTaskIds: block.taskIds,
         availableTasks: [..._unscheduledTasks, ...widget.tasks.where((task) =>
-            block.taskIds.contains(task.id))],
+        block.taskIds.contains(task.id) && !task.isCompleted)], // Exclude completed tasks
         colors: _blockColors,
-        selectedDate: widget.selectedDate, // Add this parameter
+        selectedDate: widget.selectedDate,
         onSave: (updatedBlock) {
           setState(() {
             final index = _timeBlocks.indexOf(block);
             _timeBlocks[index] = updatedBlock;
 
-            // Recalculate unscheduled tasks
+            // Recalculate unscheduled tasks (exclude completed ones)
             _unscheduledTasks = widget.tasks.where((task) =>
-            !_timeBlocks.any((b) => b.taskIds.contains(task.id))).toList();
+            !task.isCompleted && !_timeBlocks.any((b) => b.taskIds.contains(task.id))).toList();
           });
           _saveTimeBlocks();
         },
@@ -220,7 +226,7 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
             onPressed: () {
               setState(() {
                 _timeBlocks.remove(block);
-                // Add tasks back to unscheduled list
+                // Add non-completed tasks back to unscheduled list
                 for (String taskId in block.taskIds) {
                   final task = widget.tasks.firstWhere(
                         (t) => t.id == taskId,
@@ -231,7 +237,7 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
                       endTime: const TimeOfDay(hour: 10, minute: 0),
                     ),
                   );
-                  if (!_unscheduledTasks.contains(task)) {
+                  if (!task.isCompleted && !_unscheduledTasks.contains(task)) {
                     _unscheduledTasks.add(task);
                   }
                 }
@@ -247,8 +253,18 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
     );
   }
 
-  // Handle task drop on time slot
+  // Handle task drop on time slot (only for non-completed tasks)
   void _onTaskDropped(Task task, TimeSlot slot) {
+    if (task.isCompleted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot schedule completed tasks'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     if (_isSlotOccupied(slot)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Time slot is already occupied')),
@@ -319,6 +335,7 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
               // Time block or empty slot with drag target
               Expanded(
                 child: DragTarget<Task>(
+                  onWillAccept: (task) => task != null && !task.isCompleted,
                   onAccept: (task) => _onTaskDropped(task, slot),
                   builder: (context, candidateData, rejectedData) {
                     final isDraggedOver = candidateData.isNotEmpty;
@@ -368,7 +385,7 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
                             ],
                           )
                               : isDraggedOver
-                              ? Icon(
+                              ? const Icon(
                             Icons.schedule,
                             color: Colors.green,
                             size: 20,
@@ -392,158 +409,346 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
   }
 
   Widget _buildUnscheduledTasks() {
-    if (_unscheduledTasks.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
     return Card(
       margin: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.orange[50],
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(12),
-                topRight: Radius.circular(12),
+          // Unscheduled Tasks Section
+          if (_unscheduledTasks.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.schedule, color: Colors.orange[700]),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Unscheduled Tasks (${_unscheduledTasks.length})',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.orange[700],
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    'Drag to schedule',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Colors.orange[600],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: Row(
-              children: [
-                Icon(Icons.schedule, color: Colors.orange[700]),
-                const SizedBox(width: 8),
-                Text(
-                  'Unscheduled Tasks (${_unscheduledTasks.length})',
-                  style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.orange[700],
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  'Drag to schedule',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.orange[600],
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
+            ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _unscheduledTasks.length,
+              onReorder: (oldIndex, newIndex) {
+                setState(() {
+                  if (newIndex > oldIndex) {
+                    newIndex -= 1;
+                  }
+                  final Task item = _unscheduledTasks.removeAt(oldIndex);
+                  _unscheduledTasks.insert(newIndex, item);
+                });
+              },
+              itemBuilder: (context, index) {
+                final task = _unscheduledTasks[index];
+                return _buildDraggableTaskTile(task, index);
+              },
             ),
-          ),
-          ReorderableListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _unscheduledTasks.length,
-            onReorder: (oldIndex, newIndex) {
-              setState(() {
-                if (newIndex > oldIndex) {
-                  newIndex -= 1;
-                }
-                final Task item = _unscheduledTasks.removeAt(oldIndex);
-                _unscheduledTasks.insert(newIndex, item);
-              });
-            },
-            itemBuilder: (context, index) {
-              final task = _unscheduledTasks[index];
-              return Draggable<Task>(
-                key: Key(task.id),
-                data: task,
-                feedback: Material(
-                  elevation: 4,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    width: 300,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue[50],
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue, width: 2),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.schedule, color: Colors.blue[700]),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                task.title,
-                                style: GoogleFonts.poppins(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.blue[700],
-                                ),
-                              ),
-                              Text(
-                                '${task.category} • ${task.estimatedDuration} min',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.blue[600],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+          ],
+
+          // Completed Tasks Section
+          if (_completedTasks.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: _unscheduledTasks.isEmpty
+                    ? const BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
+                )
+                    : BorderRadius.zero,
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green[700]),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Completed Tasks (${_completedTasks.length})',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.green[700],
                     ),
                   ),
-                ),
-                childWhenDragging: Opacity(
-                  opacity: 0.5,
-                  child: ListTile(
-                    leading: Icon(
-                      Icons.drag_indicator,
-                      color: Colors.grey[400],
-                    ),
-                    title: Text(
-                      task.title,
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
-                    ),
-                    subtitle: Text(
-                      '${task.category} • ${task.estimatedDuration} min',
-                      style: GoogleFonts.poppins(fontSize: 12),
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.schedule),
-                      onPressed: () => _quickScheduleTask(task),
+                  const Spacer(),
+                  Text(
+                    'Cannot be scheduled',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Colors.green[600],
+                      fontStyle: FontStyle.italic,
                     ),
                   ),
-                ),
-                child: ListTile(
-                  key: Key(task.id),
-                  leading: Icon(
-                    Icons.drag_indicator,
-                    color: Colors.grey[600],
+                ],
+              ),
+            ),
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _completedTasks.length,
+              itemBuilder: (context, index) {
+                final task = _completedTasks[index];
+                return _buildCompletedTaskTile(task);
+              },
+            ),
+          ],
+
+          if (_unscheduledTasks.isEmpty && _completedTasks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                children: [
+                  Icon(Icons.task_alt, size: 48, color: Colors.grey[400]),
+                  const SizedBox(height: 8),
+                  Text(
+                    'All tasks are scheduled or completed',
+                    style: GoogleFonts.poppins(color: Colors.grey[600]),
+                    textAlign: TextAlign.center,
                   ),
-                  title: Text(
-                    task.title,
-                    style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
-                  ),
-                  subtitle: Text(
-                    '${task.category} • ${task.estimatedDuration} min',
-                    style: GoogleFonts.poppins(fontSize: 12),
-                  ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.schedule),
-                    onPressed: () => _quickScheduleTask(task),
-                  ),
-                ),
-              );
-            },
-          ),
+                ],
+              ),
+            ),
         ],
       ),
     );
   }
 
+  Widget _buildDraggableTaskTile(Task task, int index) {
+    final isJobTask = task.id.startsWith('job_');
+
+    return Draggable<Task>(
+      key: Key(task.id),
+      data: task,
+      feedback: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 300,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue, width: 2),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.schedule, color: Colors.blue[700]),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      task.title,
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w500,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    Text(
+                      '${task.category} • ${task.estimatedDuration} min',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.blue[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.5,
+        child: ListTile(
+          leading: Icon(
+            Icons.drag_indicator,
+            color: Colors.grey[400],
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  task.title,
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                ),
+              ),
+              if (isJobTask)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'JOB',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[700],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          subtitle: Text(
+            '${task.category} • ${task.estimatedDuration} min',
+            style: GoogleFonts.poppins(fontSize: 12),
+          ),
+          trailing: IconButton(
+            icon: const Icon(Icons.schedule),
+            onPressed: () => _quickScheduleTask(task),
+          ),
+        ),
+      ),
+      child: ListTile(
+        key: Key(task.id),
+        leading: Icon(
+          Icons.drag_indicator,
+          color: Colors.grey[600],
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                task.title,
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+              ),
+            ),
+            if (isJobTask)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.blue[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'JOB',
+                  style: GoogleFonts.poppins(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[700],
+                  ),
+                ),
+              ),
+          ],
+        ),
+        subtitle: Text(
+          '${task.category} • ${task.estimatedDuration} min',
+          style: GoogleFonts.poppins(fontSize: 12),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.schedule),
+          onPressed: () => _quickScheduleTask(task),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompletedTaskTile(Task task) {
+    final isJobTask = task.id.startsWith('job_');
+
+    return ListTile(
+      leading: Icon(
+        Icons.check_circle,
+        color: Colors.green[600],
+      ),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              task.title,
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.w500,
+                decoration: TextDecoration.lineThrough,
+                color: Colors.grey[600],
+              ),
+            ),
+          ),
+          if (isJobTask)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'JOB',
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ),
+          Container(
+            margin: const EdgeInsets.only(left: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.green[100],
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'COMPLETED',
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Colors.green[700],
+              ),
+            ),
+          ),
+        ],
+      ),
+      subtitle: Text(
+        '${task.category} • ${task.estimatedDuration} min',
+        style: GoogleFonts.poppins(
+          fontSize: 12,
+          color: Colors.grey[500],
+        ),
+      ),
+    );
+  }
+
   void _quickScheduleTask(Task task) {
+    if (task.isCompleted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot schedule completed tasks'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     final slots = _generateTimeSlots();
     final availableSlots = slots.where((slot) => !_isSlotOccupied(slot)).toList();
 
@@ -561,9 +766,9 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Select a time slot:'),
+            const Text('Select a time slot:'),
             const SizedBox(height: 16),
-            Container(
+            SizedBox(
               height: 200,
               child: ListView.builder(
                 itemCount: availableSlots.take(10).length,
@@ -649,7 +854,8 @@ class _TimeBlockingPageState extends State<TimeBlockingPage> {
                           '• Long press blocks to delete them\n'
                           '• Drag tasks from the list to time slots\n'
                           '• Reorder tasks by dragging within the list\n'
-                          '• Use different colors for different activities',
+                          '• Use different colors for different activities\n'
+                          '• Completed tasks cannot be scheduled',
                     ),
                     actions: [
                       TextButton(
@@ -685,7 +891,7 @@ class _TimeBlockDialog extends StatefulWidget {
   final List<String> initialTaskIds;
   final List<Task> availableTasks;
   final List<Color> colors;
-  final DateTime selectedDate; // Add this parameter
+  final DateTime selectedDate;
   final Function(TimeBlock) onSave;
 
   const _TimeBlockDialog({
@@ -696,7 +902,7 @@ class _TimeBlockDialog extends StatefulWidget {
     this.initialTaskIds = const [],
     required this.availableTasks,
     required this.colors,
-    required this.selectedDate, // Add this parameter
+    required this.selectedDate,
     required this.onSave,
   });
 
@@ -811,9 +1017,32 @@ class _TimeBlockDialogState extends State<_TimeBlockDialog> {
                   itemBuilder: (context, index) {
                     final task = widget.availableTasks[index];
                     final isSelected = _selectedTaskIds.contains(task.id);
+                    final isJobTask = task.id.startsWith('job_');
 
                     return CheckboxListTile(
-                      title: Text(task.title),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(task.title),
+                          ),
+                          if (isJobTask)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: Colors.blue[100],
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'JOB',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blue[700],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                       subtitle: Text('${task.category} • ${task.estimatedDuration} min'),
                       value: isSelected,
                       onChanged: (value) {
@@ -844,7 +1073,7 @@ class _TimeBlockDialogState extends State<_TimeBlockDialog> {
               final timeBlock = TimeBlock(
                 id: DateTime.now().millisecondsSinceEpoch.toString(),
                 title: _titleController.text.trim(),
-                date: widget.selectedDate, // Use the passed selectedDate
+                date: widget.selectedDate,
                 startTime: _startTime,
                 endTime: _endTime,
                 color: _selectedColor,

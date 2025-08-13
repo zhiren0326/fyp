@@ -37,12 +37,18 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
       try {
         final dateStr = DateFormat('yyyy-MM-dd').format(widget.selectedDate);
 
-        // Load tasks
+        // Load regular tasks
         final taskDoc = await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
             .collection('tasks')
             .doc(dateStr)
+            .get();
+
+        // Load jobs for this date
+        final jobSnapshot = await FirebaseFirestore.instance
+            .collection('jobs')
+            .where('acceptedApplicants', arrayContains: user.uid)
             .get();
 
         // Load daily goal
@@ -54,30 +60,175 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
             .get();
 
         setState(() {
+          _tasks = [];
+          _completedTasks = [];
+
+          // Process regular tasks
           if (taskDoc.exists) {
             final data = taskDoc.data()!;
             final tasksData = data['tasks'] as List<dynamic>? ?? [];
-            _tasks = tasksData
-                .map((taskData) => Task.fromMap(taskData))
-                .where((task) => !task.isCompleted)
-                .toList();
-            _completedTasks = tasksData
-                .map((taskData) => Task.fromMap(taskData))
-                .where((task) => task.isCompleted)
-                .toList();
+            for (var taskData in tasksData) {
+              final task = Task.fromMap(taskData);
+              if (task.isCompleted) {
+                _completedTasks.add(task);
+              } else {
+                _tasks.add(task);
+              }
+            }
           }
 
           if (plannerDoc.exists) {
             _dailyGoal = plannerDoc.data()?['dailyGoal'] ?? '';
           }
 
-          _calculateTotalTime();
           _isLoading = false;
+        });
+
+        // Process jobs asynchronously
+        await _processJobsAsync(jobSnapshot.docs, dateStr, user.uid);
+
+        setState(() {
+          _calculateTotalTime();
         });
       } catch (e) {
         print('Error loading daily data: $e');
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  Future<void> _processJobsAsync(List<QueryDocumentSnapshot> jobDocs, String dateStr, String userId) async {
+    final selectedDate = widget.selectedDate;
+    final selectedDateOnly = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+
+    for (var doc in jobDocs) {
+      try {
+        final data = doc.data() as Map<String, dynamic>;
+        final jobId = doc.id;
+
+        // Check if job is scheduled for the selected date
+        final startDate = data['startDate'] != null
+            ? DateTime.parse(data['startDate']).toLocal()
+            : selectedDate;
+        final startDateOnly = DateTime(startDate.year, startDate.month, startDate.day);
+
+        final isShortTerm = data['isShortTerm'] == true;
+        final endDate = isShortTerm && data['endDate'] != null
+            ? DateTime.parse(data['endDate']).toLocal()
+            : startDate;
+        final endDateOnly = DateTime(endDate.year, endDate.month, endDate.day);
+
+        bool shouldIncludeJob = false;
+
+        if (!isShortTerm) {
+          // Single day job
+          shouldIncludeJob = startDateOnly.isAtSameMomentAs(selectedDateOnly);
+        } else {
+          // Multi-day job
+          shouldIncludeJob = selectedDateOnly.isAtSameMomentAs(startDateOnly) ||
+              selectedDateOnly.isAtSameMomentAs(endDateOnly) ||
+              (selectedDateOnly.isAfter(startDateOnly) && selectedDateOnly.isBefore(endDateOnly));
+        }
+
+        if (shouldIncludeJob) {
+          // Check job completion status from taskProgress
+          final taskProgressDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userId)
+              .collection('taskProgress')
+              .doc(jobId)
+              .get();
+
+          bool isJobCompleted = false;
+          String jobStatus = 'created';
+
+          if (taskProgressDoc.exists) {
+            final progressData = taskProgressDoc.data()!;
+            isJobCompleted = progressData['completionApproved'] == true;
+            jobStatus = progressData['status'] ?? 'created';
+
+            // Also check if status is 'completed'
+            if (jobStatus.toLowerCase() == 'completed') {
+              isJobCompleted = true;
+            }
+          }
+
+          // Create task object from job
+          final jobTask = Task(
+            id: 'job_$jobId',
+            title: data['jobPosition'] ?? 'Unnamed Job',
+            description: data['description'] ?? '',
+            category: 'Work', // Job category
+            priority: _parsePriority(data['priority']),
+            estimatedDuration: (data['estimatedDuration'] ?? 60).toInt(),
+            isCompleted: isJobCompleted,
+            startTime: _parseTimeOfDay(data['startTime'] ?? '9:00 AM'),
+            endTime: _parseTimeOfDay(data['endTime'] ?? '10:00 AM'),
+            isTimeBlocked: data['isTimeBlocked'] ?? false,
+            jobId: jobId,
+          );
+
+          // Add to appropriate list based on completion status
+          setState(() {
+            if (isJobCompleted) {
+              _completedTasks.add(jobTask);
+            } else {
+              _tasks.add(jobTask);
+            }
+          });
+
+          print('Job ${data['jobPosition']} - Status: $jobStatus, Completed: $isJobCompleted');
+        }
+      } catch (e) {
+        print('Error processing job ${doc.id}: $e');
+      }
+    }
+  }
+
+  TaskPriority _parsePriority(dynamic priority) {
+    if (priority is String) {
+      switch (priority.toLowerCase()) {
+        case 'high':
+          return TaskPriority.high;
+        case 'medium':
+          return TaskPriority.medium;
+        case 'low':
+          return TaskPriority.low;
+        default:
+          return TaskPriority.medium;
+      }
+    }
+    return TaskPriority.medium;
+  }
+
+  TimeOfDay _parseTimeOfDay(String timeStr) {
+    try {
+      timeStr = timeStr.trim().toUpperCase().replaceAll(' ', '');
+      String period = 'AM';
+      String normalizedTime;
+
+      if (timeStr.contains('PM')) {
+        period = 'PM';
+        normalizedTime = timeStr.replaceAll('PM', '');
+      } else if (timeStr.contains('AM')) {
+        normalizedTime = timeStr.replaceAll('AM', '');
+      } else {
+        normalizedTime = timeStr;
+      }
+
+      List<String> parts = normalizedTime.split(':');
+      if (parts.length != 2) throw FormatException('Invalid time format: $timeStr');
+
+      int hour = int.parse(parts[0]);
+      int minute = int.parse(parts[1]);
+
+      if (period == 'PM' && hour != 12) hour += 12;
+      else if (period == 'AM' && hour == 12) hour = 0;
+
+      return TimeOfDay(hour: hour, minute: minute);
+    } catch (e) {
+      print('Error parsing time: $timeStr, $e');
+      return const TimeOfDay(hour: 9, minute: 0);
     }
   }
 
@@ -92,18 +243,24 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
       try {
         final dateStr = DateFormat('yyyy-MM-dd').format(widget.selectedDate);
 
-        // Save tasks
-        final allTasks = [..._tasks, ..._completedTasks];
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('tasks')
-            .doc(dateStr)
-            .set({
-          'date': dateStr,
-          'tasks': allTasks.map((task) => task.toMap()).toList(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
+        // Only save regular tasks (not jobs) to the tasks collection
+        // Jobs completion is handled in the taskProgress collection
+        final regularTasks = [..._tasks, ..._completedTasks]
+            .where((task) => !task.id.startsWith('job_'))
+            .toList();
+
+        if (regularTasks.isNotEmpty) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .collection('tasks')
+              .doc(dateStr)
+              .set({
+            'date': dateStr,
+            'tasks': regularTasks.map((task) => task.toMap()).toList(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
 
         // Save daily goal
         await FirebaseFirestore.instance
@@ -262,6 +419,17 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
   }
 
   void _toggleTaskCompletion(Task task) {
+    // Don't allow toggling completion for job tasks
+    if (task.id.startsWith('job_')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Job completion is managed through the Task Progress page'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     setState(() {
       if (task.isCompleted) {
         _completedTasks.remove(task);
@@ -276,6 +444,17 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
   }
 
   void _deleteTask(Task task) {
+    // Don't allow deleting job tasks
+    if (task.id.startsWith('job_')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Job tasks cannot be deleted from here'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _tasks.remove(task);
       _completedTasks.remove(task);
@@ -285,6 +464,17 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
   }
 
   void _editTask(Task task) {
+    // Don't allow editing job tasks
+    if (task.id.startsWith('job_')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Job tasks cannot be edited from here'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     final titleController = TextEditingController(text: task.title);
     final descriptionController = TextEditingController(text: task.description);
     final categoryController = TextEditingController(text: task.category);
@@ -443,7 +633,7 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
             LinearProgressIndicator(
               value: progressPercentage,
               backgroundColor: Colors.grey[300],
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.teal),
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.teal),
             ),
             const SizedBox(height: 8),
             Row(
@@ -497,7 +687,7 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
           children: [
             Row(
               children: [
-                Icon(Icons.flag, color: Colors.teal),
+                const Icon(Icons.flag, color: Colors.teal),
                 const SizedBox(width: 8),
                 Text(
                   'Daily Goal',
@@ -581,18 +771,59 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
                 Color priorityColor = task.priority == TaskPriority.high ? Colors.red :
                 task.priority == TaskPriority.medium ? Colors.orange : Colors.green;
 
+                final isJobTask = task.id.startsWith('job_');
+
                 return ListTile(
                   leading: Checkbox(
                     value: task.isCompleted,
-                    onChanged: (_) => _toggleTaskCompletion(task),
+                    onChanged: isJobTask ? null : (_) => _toggleTaskCompletion(task),
                     activeColor: Colors.teal,
                   ),
-                  title: Text(
-                    task.title,
-                    style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.w600,
-                      decoration: task.isCompleted ? TextDecoration.lineThrough : null,
-                    ),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          task.title,
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                            decoration: task.isCompleted ? TextDecoration.lineThrough : null,
+                          ),
+                        ),
+                      ),
+                      if (isJobTask)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: task.isCompleted ? Colors.grey[300] : Colors.blue[100],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'JOB',
+                            style: GoogleFonts.poppins(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: task.isCompleted ? Colors.grey[600] : Colors.blue[700],
+                            ),
+                          ),
+                        ),
+                      if (task.isCompleted)
+                        Container(
+                          margin: const EdgeInsets.only(left: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.green[100],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'COMPLETED',
+                            style: GoogleFonts.poppins(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green[700],
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -612,7 +843,7 @@ class _DailyPlannerPageState extends State<DailyPlannerPage> {
                       ),
                     ],
                   ),
-                  trailing: PopupMenuButton<String>(
+                  trailing: isJobTask ? null : PopupMenuButton<String>(
                     onSelected: (value) {
                       switch (value) {
                         case 'edit':

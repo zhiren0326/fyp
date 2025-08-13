@@ -556,14 +556,96 @@ class _JobDetailPageState extends State<JobDetailPage> {
                     const Divider(thickness: 1, color: Colors.grey),
                     _buildDetailRow('Description', widget.data['description'] ?? '-'),
                     _buildDetailRow('Location', widget.data['location'] ?? '-'),
+                    _buildDetailRow('Employer/Company', widget.data['employerName'] ?? '-'),
+                    _buildDetailRow('Employment Type', widget.data['employmentType'] ?? '-'),
+                    _buildDetailRow('Workplace Type', widget.data['workplaceType'] ?? '-'),
                     _buildDetailRow('Salary', 'RM $salary'),
                     _buildDetailRow('Required Skill', requiredSkill is String ? requiredSkill.split(',').join(', ') : requiredSkill.toString()),
                     _buildDetailRow('Task Type', taskType),
+                    _buildDetailRow('Priority', widget.data['priority'] ?? 'Medium'),
+                    _buildDetailRow('Required People', widget.data['requiredPeople']?.toString() ?? '1'),
                     _buildDetailRow('Start Date', widget.data['startDate'] ?? '-'),
                     if (widget.data['isShortTerm'] == true) ...[
                       _buildDetailRow('End Date', widget.data['endDate'] ?? '-'),
                       if (startTime != '-') _buildDetailRow('Start Time', startTime),
                       if (endTime != '-') _buildDetailRow('End Time', endTime),
+                    ],
+                    // Add recurring information if applicable
+                    if (widget.data['recurring'] == true) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.purple.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.purple.withOpacity(0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.repeat, color: Colors.purple, size: 16),
+                                const SizedBox(width: 8),
+                                Text('Recurring Task', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.purple)),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            _buildDetailRow('Frequency', widget.data['recurringFrequency']?.toString().toUpperCase() ?? '-'),
+                            if (widget.data['recurringTime'] != null)
+                              _buildDetailRow('Recurring Time', widget.data['recurringTime']),
+                            if (widget.data['recurringEndDate'] != null)
+                              _buildDetailRow('Recurring Until', widget.data['recurringEndDate']),
+                          ],
+                        ),
+                      ),
+                    ],
+                    // Add dependency information if applicable
+                    if (widget.data['dependencies'] != null && (widget.data['dependencies'] as List).isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.link, color: Colors.blue, size: 16),
+                                const SizedBox(width: 8),
+                                Text('Task Dependencies', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.blue)),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            _buildDetailRow('Dependencies', (widget.data['dependencies'] as List).join(', ')),
+                            if (widget.data['dependencyLogic'] != null)
+                              _buildDetailRow('Logic', widget.data['dependencyLogic'].toString().split('.').last),
+                          ],
+                        ),
+                      ),
+                    ],
+                    // Add time blocking information if applicable
+                    if (widget.data['isTimeBlocked'] == true) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.schedule, color: Colors.orange, size: 16),
+                            const SizedBox(width: 8),
+                            Text('Time Blocked Task', style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.orange)),
+                          ],
+                        ),
+                      ),
                     ],
                   ],
                 ),

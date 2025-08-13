@@ -8,15 +8,6 @@ import 'package:flutter/services.dart';
 import '../Notification Module/NotificationService.dart';
 import 'LocationPickerPage.dart';
 
-enum DependencyLogic {
-  strictAnd,
-  flexibleAnd,
-  partialOr,
-  anyOr,
-  weighted,
-  conditional,
-}
-
 class AddJobPage extends StatefulWidget {
   final String? jobId;
   final Map<String, dynamic>? initialData;
@@ -37,13 +28,7 @@ class _AddJobPageState extends State<AddJobPage> {
   TimeOfDay recurringTime = TimeOfDay(hour: 9, minute: 0);
   DateTime? recurringEndDate;
 
-  // dependency features
   String selectedPriority = 'Medium';
-  List<String> taskDependencies = [];
-  List<String> availableTasks = [];
-  DependencyLogic dependencyLogic = DependencyLogic.strictAnd;
-  Map<String, double> dependencyWeights = {};
-  double dependencyThreshold = 100.0;
 
   final Map<String, TextEditingController> controllers = {
     'Job position*': TextEditingController(),
@@ -77,7 +62,6 @@ class _AddJobPageState extends State<AddJobPage> {
   @override
   void initState() {
     super.initState();
-    _loadAvailableTasks();
     if (widget.initialData != null) {
       _populateFromInitialData();
     }
@@ -105,7 +89,6 @@ class _AddJobPageState extends State<AddJobPage> {
     isShortTerm = data['isShortTerm'] ?? true;
     isRecurring = data['recurring'] ?? false;
     selectedPriority = data['priority'] ?? 'Medium';
-    taskDependencies = List<String>.from(data['dependencies'] ?? []);
     isTimeBlocked = data['isTimeBlocked'] ?? false;
 
     // Recurring features
@@ -121,63 +104,7 @@ class _AddJobPageState extends State<AddJobPage> {
         ? DateTime.tryParse(data['recurringEndDate'])
         : null;
 
-    // Dependency features
-    dependencyLogic = DependencyLogic.values.firstWhere(
-          (e) => e.toString() == data['dependencyLogic'],
-      orElse: () => DependencyLogic.strictAnd,
-    );
-    dependencyWeights = Map<String, double>.from(data['dependencyWeights'] ?? {});
-    dependencyThreshold = data['dependencyThreshold'] ?? 100.0;
-
     visibleInputs.addAll(controllers.keys.where((key) => (controllers[key]?.text ?? '').isNotEmpty));
-  }
-
-  Future<void> _loadAvailableTasks() async {
-    try {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
-
-      // Load both jobs and personal tasks
-      final jobsSnapshot = await FirebaseFirestore.instance
-          .collection('jobs')
-          .where('postedBy', isEqualTo: currentUser.uid)
-          .get();
-
-      final tasksSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .collection('tasks')
-          .get();
-
-      List<String> tasks = [];
-
-      // Add jobs
-      for (var doc in jobsSnapshot.docs) {
-        final data = doc.data();
-        final title = data['jobPosition'] ?? 'Untitled Job';
-        if (!tasks.contains(title)) {
-          tasks.add(title);
-        }
-      }
-
-      // Add personal tasks
-      for (var doc in tasksSnapshot.docs) {
-        final data = doc.data();
-        if (data['tasks'] != null) {
-          for (var task in data['tasks']) {
-            if (task['title'] != null && !tasks.contains(task['title'])) {
-              tasks.add(task['title']);
-            }
-          }
-        }
-      }
-
-      setState(() {
-        availableTasks = tasks;
-      });
-    } catch (e) {
-      print('Error loading available tasks: $e');
-    }
   }
 
   @override
@@ -346,10 +273,6 @@ class _AddJobPageState extends State<AddJobPage> {
       'jobCreator': userId,
       // task management
       'priority': selectedPriority,
-      'dependencies': taskDependencies,
-      'dependencyLogic': dependencyLogic.toString(),
-      'dependencyWeights': dependencyWeights,
-      'dependencyThreshold': dependencyThreshold,
       'isTimeBlocked': isTimeBlocked,
       'progressPercentage': 0,
       'milestones': [],
@@ -604,9 +527,6 @@ class _AddJobPageState extends State<AddJobPage> {
         'status': 'created',
         'jobCreator': jobCreatorId,
         'canEditProgress': [jobCreatorId],
-        'dependencies': taskDependencies,
-        'dependencyLogic': dependencyLogic.toString(),
-        'isBlocked': taskDependencies.isNotEmpty,
       });
     } catch (e) {
       print('Error creating task progress: $e');
@@ -624,8 +544,6 @@ class _AddJobPageState extends State<AddJobPage> {
         'taskTitle': controllers['Job position*']?.text ?? 'Task',
         'lastUpdated': Timestamp.now(),
         'status': 'updated',
-        'dependencies': taskDependencies,
-        'dependencyLogic': dependencyLogic.toString(),
       });
     } catch (e) {
       print('Error updating task progress: $e');
@@ -648,8 +566,6 @@ class _AddJobPageState extends State<AddJobPage> {
           'isRecurring': isRecurring,
           'recurringFrequency': isRecurring ? recurringFrequency : null,
           'isTimeBlocked': isTimeBlocked,
-          'dependencyLogic': dependencyLogic.toString(),
-          'dependenciesCount': taskDependencies.length,
         }
       });
     } catch (e) {
@@ -881,179 +797,6 @@ class _AddJobPageState extends State<AddJobPage> {
     );
   }
 
-  Widget _buildDependenciesSelector() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 3))],
-        border: taskDependencies.isNotEmpty ? Border.all(color: const Color(0xFF006D77), width: 2) : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Task Dependencies',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: const Color(0xFF006D77),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.add, color: Color(0xFF006D77)),
-                onPressed: _showDependencySelector,
-              ),
-            ],
-          ),
-          if (taskDependencies.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Dependency Logic',
-              style: GoogleFonts.poppins(fontWeight: FontWeight.w500, fontSize: 12),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<DependencyLogic>(
-              value: dependencyLogic,
-              items: DependencyLogic.values.map((logic) => DropdownMenuItem(
-                value: logic,
-                child: Text(_getDependencyLogicName(logic), style: GoogleFonts.poppins(fontSize: 12)),
-              )).toList(),
-              onChanged: (val) => setState(() => dependencyLogic = val ?? DependencyLogic.strictAnd),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: const Color(0xFFF9F9F9),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _getDependencyLogicDescription(dependencyLogic),
-              style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey[600]),
-            ),
-            if (dependencyLogic == DependencyLogic.weighted) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Completion Threshold: ${dependencyThreshold.round()}%',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w500, fontSize: 12),
-              ),
-              Slider(
-                value: dependencyThreshold,
-                min: 0,
-                max: 100,
-                divisions: 20,
-                label: '${dependencyThreshold.round()}%',
-                onChanged: (value) => setState(() => dependencyThreshold = value),
-                activeColor: const Color(0xFF006D77),
-              ),
-            ],
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: taskDependencies.map((dependency) {
-                return Chip(
-                  label: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(dependency, style: GoogleFonts.poppins(fontSize: 12)),
-                      if (dependencyLogic == DependencyLogic.weighted)
-                        Text(
-                          'Weight: ${(dependencyWeights[dependency] ?? 1.0).toStringAsFixed(1)}',
-                          style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey[600]),
-                        ),
-                    ],
-                  ),
-                  deleteIcon: const Icon(Icons.close, size: 16),
-                  onDeleted: () => setState(() {
-                    taskDependencies.remove(dependency);
-                    dependencyWeights.remove(dependency);
-                  }),
-                  backgroundColor: const Color(0xFFB2DFDB),
-                );
-              }).toList(),
-            ),
-            if (dependencyLogic == DependencyLogic.weighted && taskDependencies.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Dependency Weights',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w500, fontSize: 12),
-              ),
-              ...taskDependencies.map((dep) {
-                final weight = dependencyWeights[dep] ?? 1.0;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(dep, style: GoogleFonts.poppins(fontSize: 12)),
-                      ),
-                      SizedBox(
-                        width: 150,
-                        child: Slider(
-                          value: weight,
-                          min: 0.1,
-                          max: 5.0,
-                          divisions: 49,
-                          label: weight.toStringAsFixed(1),
-                          onChanged: (value) => setState(() => dependencyWeights[dep] = value),
-                          activeColor: const Color(0xFF006D77),
-                        ),
-                      ),
-                      Text(
-                        weight.toStringAsFixed(1),
-                        style: GoogleFonts.poppins(fontSize: 12),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ],
-          ],
-        ],
-      ),
-    );
-  }
-
-  String _getDependencyLogicName(DependencyLogic logic) {
-    switch (logic) {
-      case DependencyLogic.strictAnd:
-        return 'Strict AND';
-      case DependencyLogic.flexibleAnd:
-        return 'Flexible AND';
-      case DependencyLogic.partialOr:
-        return 'Partial OR';
-      case DependencyLogic.anyOr:
-        return 'Any OR';
-      case DependencyLogic.weighted:
-        return 'Weighted';
-      case DependencyLogic.conditional:
-        return 'Conditional';
-    }
-  }
-
-  String _getDependencyLogicDescription(DependencyLogic logic) {
-    switch (logic) {
-      case DependencyLogic.strictAnd:
-        return 'All dependencies must be completed';
-      case DependencyLogic.flexibleAnd:
-        return 'All dependencies must be started';
-      case DependencyLogic.partialOr:
-        return 'At least 50% must be completed';
-      case DependencyLogic.anyOr:
-        return 'At least one must be completed';
-      case DependencyLogic.weighted:
-        return 'Custom weighted completion threshold';
-      case DependencyLogic.conditional:
-        return 'Priority-based conditional logic';
-    }
-  }
-
   Widget _buildPrioritySelector() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1096,44 +839,6 @@ class _AddJobPageState extends State<AddJobPage> {
                 ),
               );
             }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showDependencySelector() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Dependencies'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: availableTasks.map((task) {
-              final isSelected = taskDependencies.contains(task);
-              return CheckboxListTile(
-                title: Text(task),
-                value: isSelected,
-                onChanged: (bool? value) {
-                  setState(() {
-                    if (value == true && !taskDependencies.contains(task)) {
-                      taskDependencies.add(task);
-                      dependencyWeights[task] = 1.0; // Default weight
-                    } else if (value == false) {
-                      taskDependencies.remove(task);
-                      dependencyWeights.remove(task);
-                    }
-                  });
-                },
-              );
-            }).toList(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Done'),
           ),
         ],
       ),
@@ -1378,7 +1083,6 @@ class _AddJobPageState extends State<AddJobPage> {
             style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w600, color: const Color(0xFF006D77)),
           ),
           actions: [
-            // Debug buttons (remove these in production)
             TextButton(
               onPressed: _submitJob,
               child: Text(
@@ -1445,9 +1149,6 @@ class _AddJobPageState extends State<AddJobPage> {
                     // Recurring task section
                     _buildRecurringSection(),
 
-                    // dependencies section
-                    _buildDependenciesSelector(),
-
                     // Date and time fields
                     Container(
                       margin: const EdgeInsets.symmetric(vertical: 16),
@@ -1467,7 +1168,7 @@ class _AddJobPageState extends State<AddJobPage> {
                     _buildFieldTile('Required People*'),
 
                     // Summary card
-                    if (isRecurring || taskDependencies.isNotEmpty)
+                    if (isRecurring)
                       Container(
                         margin: const EdgeInsets.symmetric(vertical: 16),
                         padding: const EdgeInsets.all(16),
@@ -1495,19 +1196,6 @@ class _AddJobPageState extends State<AddJobPage> {
                                   const SizedBox(width: 8),
                                   Text(
                                     'Recurring: $recurringFrequency at ${recurringTime.format(context)}',
-                                    style: GoogleFonts.poppins(fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                            ],
-                            if (taskDependencies.isNotEmpty) ...[
-                              Row(
-                                children: [
-                                  const Icon(Icons.link, size: 16, color: Color(0xFF006D77)),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Dependencies: ${taskDependencies.length} (${_getDependencyLogicName(dependencyLogic)})',
                                     style: GoogleFonts.poppins(fontSize: 12),
                                   ),
                                 ],

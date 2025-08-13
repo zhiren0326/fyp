@@ -59,19 +59,35 @@ import 'package:fyp/Add%20Job%20Module/ManageApplicantPage.dart';
           allJobs[doc.id] = doc;
         }
 
-        // Convert to list and sort by posted date (newest first)
+        // Convert to list and sort by posted date with enhanced sorting
         final jobsList = allJobs.values.toList();
         jobsList.sort((a, b) {
           final aData = a.data() as Map<String, dynamic>;
           final bData = b.data() as Map<String, dynamic>;
+
+          // Get timestamps
           final aTimestamp = aData['postedAt'] as Timestamp?;
           final bTimestamp = bData['postedAt'] as Timestamp?;
 
-          if (aTimestamp == null && bTimestamp == null) return 0;
-          if (aTimestamp == null) return 1;
-          if (bTimestamp == null) return -1;
+          // Handle null cases - put jobs without timestamps at the end
+          if (aTimestamp == null && bTimestamp == null) {
+            // Secondary sort by document ID if both timestamps are null
+            return b.id.compareTo(a.id);
+          }
+          if (aTimestamp == null) return 1; // Move null timestamps to end
+          if (bTimestamp == null) return -1; // Move null timestamps to end
 
-          return bTimestamp.compareTo(aTimestamp); // Newest first
+          // Primary sort: newest first (descending order)
+          final timeComparison = bTimestamp.compareTo(aTimestamp);
+
+          // If timestamps are exactly the same, sort by job position alphabetically
+          if (timeComparison == 0) {
+            final aJobPosition = (aData['jobPosition'] as String?) ?? '';
+            final bJobPosition = (bData['jobPosition'] as String?) ?? '';
+            return aJobPosition.compareTo(bJobPosition);
+          }
+
+          return timeComparison;
         });
 
         return jobsList;
@@ -241,6 +257,7 @@ import 'package:fyp/Add%20Job%20Module/ManageApplicantPage.dart';
                   stream: FirebaseFirestore.instance
                       .collection('jobs')
                       .where('postedBy', isEqualTo: currentUser.uid)
+                      .orderBy('postedAt', descending: true) // Order by newest first at database level
                       .snapshots(),
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {

@@ -440,6 +440,93 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
     return badgeNames[badgeId] ?? badgeId;
   }
 
+  Future<void> _updateJobProgressFromIndividualProgress(String taskId) async {
+    try {
+      final jobDoc = await FirebaseFirestore.instance
+          .collection('jobs')
+          .doc(taskId)
+          .get();
+
+      if (!jobDoc.exists) return;
+
+      final data = jobDoc.data()!;
+      final acceptedApplicants = List<String>.from(data['acceptedApplicants'] ?? []);
+
+      if (acceptedApplicants.isEmpty) {
+        await FirebaseFirestore.instance
+            .collection('jobs')
+            .doc(taskId)
+            .update({
+          'overallProgress': 0.0,
+          'progressPercentage': 0.0,
+        });
+        return;
+      }
+
+      List<double> allProgressValues = [];
+      int completedCount = 0;
+      int totalMembers = acceptedApplicants.length;
+
+      for (String applicantId in acceptedApplicants) {
+        try {
+          final progressDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(applicantId)
+              .collection('taskProgress')
+              .doc(taskId)
+              .get();
+
+          double progress = 0.0;
+          bool completionApproved = false;
+
+          if (progressDoc.exists) {
+            final progressData = progressDoc.data()!;
+            progress = (progressData['currentProgress'] ?? 0.0).toDouble();
+            completionApproved = progressData['completionApproved'] ?? false;
+
+            if (completionApproved && progress >= 100) {
+              completedCount++;
+            }
+          }
+
+          // Always include all team members in the calculation (including those with 0% progress)
+          allProgressValues.add(progress);
+
+          print('Progress for applicant $applicantId: $progress%');
+        } catch (e) {
+          print('Error getting progress for $applicantId: $e');
+          allProgressValues.add(0.0);
+        }
+      }
+
+      // Calculate simple average of ALL team members' progress
+      final avgProgress = allProgressValues.isNotEmpty
+          ? allProgressValues.reduce((a, b) => a + b) / allProgressValues.length
+          : 0.0;
+
+      // Determine if job is completed (all members have completed their tasks)
+      final isJobCompleted = completedCount == totalMembers && totalMembers > 0;
+
+      await FirebaseFirestore.instance
+          .collection('jobs')
+          .doc(taskId)
+          .update({
+        'overallProgress': double.parse(avgProgress.toStringAsFixed(2)),
+        'progressPercentage': double.parse(avgProgress.toStringAsFixed(2)),
+        'isCompleted': isJobCompleted,
+        'completedMembers': completedCount,
+        'totalMembers': totalMembers,
+        'lastProgressUpdate': FieldValue.serverTimestamp(),
+      });
+
+      print('Job progress updated: ${avgProgress.toStringAsFixed(2)}% (${completedCount}/${totalMembers} completed)');
+      print('Individual progress values: $allProgressValues');
+      print('Average calculation: ${allProgressValues.reduce((a, b) => a + b)} / ${allProgressValues.length} = ${avgProgress.toStringAsFixed(2)}%');
+    } catch (e) {
+      print('Error updating job progress: $e');
+    }
+  }
+
   Future<void> _updateTaskProgress(String taskId, int newProgress, {String? completionNotes}) async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
@@ -503,14 +590,12 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
         'action': newProgress == 100 ? 'completion_requested' : 'progress_updated',
       });
 
-      // Update jobs collection
+      // Update overall job progress (CRITICAL FIX)
+      await _updateJobProgressFromIndividualProgress(taskId);
+
+      // Update jobs collection with the new calculated progress
       final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(taskId).get();
       if (jobDoc.exists) {
-        await FirebaseFirestore.instance.collection('jobs').doc(taskId).update({
-          'progressPercentage': newProgress,
-          'isCompleted': newProgress == 100 && taskData['completionApproved'] == true,
-        });
-
         // Enhanced notification for completion review
         if (newProgress == 100) {
           final jobData = jobDoc.data()!;
@@ -532,8 +617,6 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
           } else {
             userName = 'Unknown User';
           }
-
-
 
           // Create notification in Firestore (for app notification history)
           await FirebaseFirestore.instance
@@ -1048,6 +1131,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
       stream: FirebaseFirestore.instance
           .collection('jobs')
           .where('postedBy', isEqualTo: currentUser.uid)
+          .orderBy('postedAt', descending: true) // Add this line
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1291,6 +1375,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
           .collection('users')
           .doc(currentUser.uid)
           .collection('taskProgress')
+          .orderBy('createdAt', descending: true) // Add this line
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {

@@ -1,9 +1,11 @@
+// Updated NotificationSettingsPage.dart - Removed Task Notifications, Priority Filter, and most testing methods
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'NotificationService.dart';
+import 'UserDataService.dart'; // Import the updated service
 
 class NotificationSettingsPage extends StatefulWidget {
   const NotificationSettingsPage({super.key});
@@ -15,33 +17,58 @@ class NotificationSettingsPage extends StatefulWidget {
 class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   final NotificationService _notificationService = NotificationService();
 
-  // Settings variables
+  // Settings variables (removed general settings)
   int deadlineWarningHours = 24;
   int secondWarningHours = 2;
   bool deadlineNotificationsEnabled = true;
   bool dailySummaryEnabled = true;
   bool weeklySummaryEnabled = true;
   String dailySummaryTime = '09:00';
-  bool soundEnabled = true;
-  bool vibrationEnabled = true;
   bool highPriorityOnly = false;
 
-  // Additional settings
+  // Additional settings (keep in state but don't show in UI)
   bool taskAssignedNotifications = true;
   bool statusChangeNotifications = true;
   bool completionReviewNotifications = true;
   bool milestoneNotifications = true;
 
+  // Keep soundEnabled and vibrationEnabled for compatibility but don't show in UI
+  bool soundEnabled = true;
+  bool vibrationEnabled = true;
+
   bool _isLoading = true;
-  bool _isTesting = false;
+  bool _isSaving = false;
+  String? _currentUserId;
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
+    _initializeUser();
   }
 
-  // ... existing _loadSettings, _saveSettings, etc. methods remain the same ...
+  Future<void> _initializeUser() async {
+    try {
+      User? currentUser = FirebaseAuth.instance.currentUser;
+
+      if (currentUser == null) {
+        UserCredential userCredential = await FirebaseAuth.instance.signInAnonymously();
+        currentUser = userCredential.user;
+      }
+
+      if (currentUser != null) {
+        setState(() {
+          _currentUserId = currentUser!.uid;
+        });
+        print('Initialized user: ${currentUser.uid}');
+        await _loadSettings();
+      } else {
+        setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      print('Error initializing user: $e');
+      setState(() => _isLoading = false);
+    }
+  }
 
   Future<void> _loadSettings() async {
     setState(() => _isLoading = true);
@@ -63,8 +90,8 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             deadlineWarningHours = data['deadlineWarningHours'] ?? 24;
             secondWarningHours = data['secondWarningHours'] ?? 2;
             deadlineNotificationsEnabled = data['deadlineNotificationsEnabled'] ?? true;
-            dailySummaryEnabled = data['dailySummaryEnabled'] ?? true;
-            weeklySummaryEnabled = data['weeklySummaryEnabled'] ?? true;
+            dailySummaryEnabled = data['dailySummaryEnabled'] ?? false; // Default to false for new users
+            weeklySummaryEnabled = data['weeklySummaryEnabled'] ?? false; // Default to false for new users
             dailySummaryTime = data['dailySummaryTime'] ?? '09:00';
             soundEnabled = data['soundEnabled'] ?? true;
             vibrationEnabled = data['vibrationEnabled'] ?? true;
@@ -97,8 +124,8 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
       deadlineWarningHours = prefs.getInt('deadline_warning_hours') ?? 24;
       secondWarningHours = prefs.getInt('second_warning_hours') ?? 2;
       deadlineNotificationsEnabled = prefs.getBool('deadline_notifications_enabled') ?? true;
-      dailySummaryEnabled = prefs.getBool('daily_summary_enabled') ?? true;
-      weeklySummaryEnabled = prefs.getBool('weekly_summary_enabled') ?? true;
+      dailySummaryEnabled = prefs.getBool('daily_summary_enabled') ?? false;
+      weeklySummaryEnabled = prefs.getBool('weekly_summary_enabled') ?? false;
       dailySummaryTime = prefs.getString('daily_summary_time') ?? '09:00';
       soundEnabled = prefs.getBool('sound_enabled') ?? true;
       vibrationEnabled = prefs.getBool('vibration_enabled') ?? true;
@@ -111,7 +138,12 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   }
 
   Future<void> _saveSettings() async {
+    if (_isSaving) return; // Prevent multiple saves
+
+    setState(() => _isSaving = true);
+
     try {
+      // Save to SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('deadline_warning_hours', deadlineWarningHours);
       await prefs.setInt('second_warning_hours', secondWarningHours);
@@ -127,6 +159,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
       await prefs.setBool('completion_review_notifications', completionReviewNotifications);
       await prefs.setBool('milestone_notifications', milestoneNotifications);
 
+      // Save to Firestore and reinitialize notification service
       await _notificationService.saveNotificationPreferences(
         deadlineWarningHours: deadlineWarningHours,
         secondWarningHours: secondWarningHours,
@@ -143,20 +176,27 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
         milestoneNotifications: milestoneNotifications,
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Settings saved successfully', style: GoogleFonts.poppins()),
-          backgroundColor: const Color(0xFF006D77),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Settings saved and notification timers updated!', style: GoogleFonts.poppins()),
+            backgroundColor: const Color(0xFF006D77),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     } catch (e) {
       print('Error saving settings: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error saving settings: $e', style: GoogleFonts.poppins()),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error saving settings: $e', style: GoogleFonts.poppins()),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isSaving = false);
     }
   }
 
@@ -170,72 +210,77 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     final TimeOfDay? picked = await showTimePicker(
       context: context,
       initialTime: initialTime,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFF006D77),
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
 
     if (picked != null) {
       setState(() {
         dailySummaryTime = '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
       });
-    }
-  }
 
-  // TEST METHODS
-  Future<void> _runTestSuite() async {
-    setState(() => _isTesting = true);
-
-    try {
+      // Show immediate feedback about the time change
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('🧪 Running notification test suite...', style: GoogleFonts.poppins()),
-          backgroundColor: const Color(0xFF006D77),
+          content: Text('Daily summary time set to $dailySummaryTime. Save settings to apply!', style: GoogleFonts.poppins()),
+          backgroundColor: Colors.blue,
           duration: const Duration(seconds: 2),
         ),
       );
-
-      await _notificationService.runNotificationTestSuite();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('✅ Test suite completed! Check your notifications.', style: GoogleFonts.poppins()),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('❌ Test failed: $e', style: GoogleFonts.poppins()),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    } finally {
-      setState(() => _isTesting = false);
     }
   }
 
-  Future<void> _testUrgentNotification() async {
-    try {
-      await _notificationService.testUrgentNotification();
-      _showTestSnackBar('🚨 Urgent notification sent!');
-    } catch (e) {
-      _showErrorSnackBar('Failed to send urgent notification: $e');
-    }
+  String _formatCurrentDate() {
+    final now = DateTime.now();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[now.month - 1]} ${now.day}';
   }
 
-  Future<void> _testPriorityLevels() async {
-    try {
-      await _notificationService.testPriorityLevels();
-      _showTestSnackBar('🎨 Priority level test notifications sent! (4 notifications with 3s intervals)');
-    } catch (e) {
-      _showErrorSnackBar('Failed to send priority test: $e');
-    }
-  }
-
+  // TEST METHODS - Keep only daily and weekly summary tests (FIXED to not interfere with automatic system)
   Future<void> _testDailySummary() async {
     try {
-      await _notificationService.testDailySummary();
-      _showTestSnackBar('📊 Daily summary test sent!');
+      if (_currentUserId == null) {
+        _showErrorSnackBar('No user ID available');
+        return;
+      }
+
+      _showTestSnackBar('📊 Testing daily summary...');
+
+      // Create a test notification that doesn't interfere with the automatic system
+      await _notificationService.createFirestoreNotification(
+        userId: _currentUserId!,
+        title: '📊 TEST: Daily Summary - ${_formatCurrentDate()}',
+        body: '🧪 This is a test daily summary notification. Today: 5/8 tasks completed • 250 points earned!',
+        data: {
+          'type': 'daily_summary',
+          'date': DateTime.now().toIso8601String(),
+          'totalTasks': 8,
+          'completedTasks': 5,
+          'inProgressTasks': 2,
+          'pendingTasks': 1,
+          'pointsEarned': 250,
+          'totalEarnings': 120.0,
+          'completionRate': 62.5,
+          'isTest': true, // Mark as test
+          'isManualTest': true,
+        },
+        priority: NotificationPriority.low,
+        sendImmediately: true,
+      );
+
+      _showTestSnackBar('✅ Daily summary test sent successfully!');
     } catch (e) {
       _showErrorSnackBar('Failed to send daily summary: $e');
     }
@@ -243,20 +288,48 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
   Future<void> _testWeeklySummary() async {
     try {
-      await _notificationService.testWeeklySummary();
-      _showTestSnackBar('📈 Weekly summary test sent!');
+      if (_currentUserId == null) {
+        _showErrorSnackBar('No user ID available');
+        return;
+      }
+
+      _showTestSnackBar('📈 Testing weekly summary...');
+
+      final now = DateTime.now();
+      final weekStart = now.subtract(Duration(days: now.weekday - 1));
+      final weekStartDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
+
+      // Create a test notification that doesn't interfere with the automatic system
+      await _notificationService.createFirestoreNotification(
+        userId: _currentUserId!,
+        title: '📈 TEST: Weekly Summary - Week of ${_formatDate(weekStartDate)}',
+        body: '🧪 This is a test weekly summary. This week: 18/25 tasks completed (72.0% rate) • 900 points earned!',
+        data: {
+          'type': 'weekly_summary',
+          'weekStart': weekStartDate.toIso8601String(),
+          'weekEnd': weekStartDate.add(const Duration(days: 7)).toIso8601String(),
+          'totalTasks': 25,
+          'completedTasks': 18,
+          'totalPoints': 900,
+          'totalEarnings': 540.0,
+          'completionRate': 72.0,
+          'isTest': true, // Mark as test
+          'isManualTest': true,
+        },
+        priority: NotificationPriority.low,
+        sendImmediately: true,
+      );
+
+      _showTestSnackBar('✅ Weekly summary test sent successfully!');
     } catch (e) {
       _showErrorSnackBar('Failed to send weekly summary: $e');
     }
   }
 
-  Future<void> _testScheduledNotification() async {
-    try {
-      await _notificationService.testScheduledNotification();
-      _showTestSnackBar('⏰ Scheduled notification test created! Will arrive in 30 seconds.');
-    } catch (e) {
-      _showErrorSnackBar('Failed to schedule notification: $e');
-    }
+  String _formatDate(DateTime date) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[date.month - 1]} ${date.day}';
   }
 
   void _showTestSnackBar(String message) {
@@ -278,8 +351,6 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
       ),
     );
   }
-
-
 
   Widget _buildSectionHeader(String title, {String? subtitle}) {
     return Padding(
@@ -424,6 +495,14 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             color: enabled ? null : Colors.grey,
           ),
         ),
+        subtitle: Text(
+          'Current time: $time ${dailySummaryEnabled ? "(Active)" : "(Inactive)"}',
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            color: dailySummaryEnabled ? const Color(0xFF006D77) : Colors.grey,
+            fontWeight: dailySummaryEnabled ? FontWeight.w500 : FontWeight.normal,
+          ),
+        ),
         trailing: InkWell(
           onTap: enabled ? onTap : null,
           borderRadius: BorderRadius.circular(8),
@@ -531,43 +610,67 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
           backgroundColor: const Color(0xFF006D77),
           elevation: 0,
           actions: [
-            IconButton(
-              icon: const Icon(Icons.save),
-              onPressed: _saveSettings,
-              tooltip: 'Save Settings',
-            ),
+            if (_isSaving)
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    strokeWidth: 2,
+                  ),
+                ),
+              )
+            else
+              IconButton(
+                icon: const Icon(Icons.save),
+                onPressed: _saveSettings,
+                tooltip: 'Save Settings',
+              ),
           ],
         ),
         body: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // General Settings
-              _buildSectionHeader(
-                'General Settings',
-                subtitle: 'Configure basic notification preferences',
-              ),
-              _buildSettingTile(
-                title: 'Sound',
-                subtitle: 'Play sound for notifications',
-                value: soundEnabled,
-                onChanged: (val) => setState(() => soundEnabled = val),
-                icon: Icons.volume_up,
-              ),
-              _buildSettingTile(
-                title: 'Vibration',
-                subtitle: 'Vibrate for notifications',
-                value: vibrationEnabled,
-                onChanged: (val) => setState(() => vibrationEnabled = val),
-                icon: Icons.vibration,
-              ),
-              _buildSettingTile(
-                title: 'High Priority Only',
-                subtitle: 'Only show urgent and high priority notifications',
-                value: highPriorityOnly,
-                onChanged: (val) => setState(() => highPriorityOnly = val),
-                icon: Icons.priority_high,
-              ),
+              // User Info Card
+              if (_currentUserId != null)
+                Card(
+                  margin: const EdgeInsets.all(16),
+                  elevation: 1,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.person, color: Colors.grey[600], size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'User: ${_currentUserId!.substring(0, 8)}...',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                        const Spacer(),
+                        Icon(
+                          _notificationService.isInitialized ? Icons.check_circle : Icons.error,
+                          color: _notificationService.isInitialized ? Colors.green : Colors.red,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _notificationService.isInitialized ? 'Service Ready' : 'Service Error',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            color: _notificationService.isInitialized ? Colors.green : Colors.red,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
 
               // Deadline Alerts
               _buildSectionHeader(
@@ -602,101 +705,61 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
               // Summary Notifications
               _buildSectionHeader(
-                'Summary Notifications',
-                subtitle: 'Get daily and weekly task summaries',
+                '📊 Summary Notifications',
+                subtitle: 'Get automatic daily and weekly progress reports',
               ),
-              _buildSettingTile(
-                title: 'Daily Summary',
-                subtitle: 'Receive daily task progress summary',
-                value: dailySummaryEnabled,
-                onChanged: (val) => setState(() => dailySummaryEnabled = val),
-                icon: Icons.today,
-              ),
-              if (dailySummaryEnabled)
-                _buildTimePicker(
-                  title: 'Daily Summary Time',
-                  time: dailySummaryTime,
-                  onTap: _selectTime,
+
+              // Enhanced Daily Summary Section
+              Card(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Column(
+                  children: [
+                    _buildSettingTile(
+                      title: 'Daily Summary',
+                      subtitle: 'Receive daily task progress summary automatically',
+                      value: dailySummaryEnabled,
+                      onChanged: (val) => setState(() => dailySummaryEnabled = val),
+                      icon: Icons.today,
+                    ),
+                    if (dailySummaryEnabled) ...[
+                      const Divider(height: 1),
+                      _buildTimePicker(
+                        title: 'Daily Summary Time',
+                        time: dailySummaryTime,
+                        onTap: _selectTime,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                          '💡 Summary will be sent automatically every day at $dailySummaryTime if you have activity data.',
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
+              ),
+
               _buildSettingTile(
                 title: 'Weekly Summary',
-                subtitle: 'Receive weekly task report every Monday',
+                subtitle: 'Receive weekly task report every Monday morning',
                 value: weeklySummaryEnabled,
                 onChanged: (val) => setState(() => weeklySummaryEnabled = val),
                 icon: Icons.date_range,
               ),
 
-              // Task Notifications
+              // Summary Testing Section
               _buildSectionHeader(
-                'Task Notifications',
-                subtitle: 'Choose which task updates you want to receive',
-              ),
-              _buildSettingTile(
-                title: 'New Task Assigned',
-                subtitle: 'Notify when a new task is assigned to you',
-                value: taskAssignedNotifications,
-                onChanged: (val) => setState(() => taskAssignedNotifications = val),
-                icon: Icons.assignment_turned_in,
-              ),
-              _buildSettingTile(
-                title: 'Status Changes',
-                subtitle: 'Notify when task status changes',
-                value: statusChangeNotifications,
-                onChanged: (val) => setState(() => statusChangeNotifications = val),
-                icon: Icons.update,
-              ),
-              _buildSettingTile(
-                title: 'Completion Reviews',
-                subtitle: 'Notify when your task completion is reviewed',
-                value: completionReviewNotifications,
-                onChanged: (val) => setState(() => completionReviewNotifications = val),
-                icon: Icons.rate_review,
-              ),
-              _buildSettingTile(
-                title: 'Milestone Updates',
-                subtitle: 'Notify when milestones are added or completed',
-                value: milestoneNotifications,
-                onChanged: (val) => setState(() => milestoneNotifications = val),
-                icon: Icons.flag,
+                '🧪 Summary Testing',
+                subtitle: 'Test summary notifications',
               ),
 
-              // TESTING SECTION
-              _buildSectionHeader(
-                '🧪 Notification Testing',
-                subtitle: 'Test different notification types and priorities',
-              ),
-
-              // Comprehensive Test Suite
-              _buildTestButton(
-                title: _isTesting ? 'Running Test Suite...' : 'Run Complete Test Suite',
-                onPressed: _runTestSuite,
-                icon: _isTesting ? Icons.hourglass_empty : Icons.science,
-                enabled: !_isTesting,
-              ),
-
-              // Individual Tests
-              _buildTestButton(
-                title: 'Test Urgent Notification (Red + Vibration)',
-                onPressed: _testUrgentNotification,
-                icon: Icons.warning,
-                color: Colors.red,
-              ),
-
-              _buildTestButton(
-                title: 'Test Priority Levels (4 notifications)',
-                onPressed: _testPriorityLevels,
-                icon: Icons.layers,
-                color: Colors.orange,
-              ),
-
-              _buildTestButton(
-                title: 'Test Scheduled Notification (30s delay)',
-                onPressed: _testScheduledNotification,
-                icon: Icons.schedule,
-                color: Colors.blue,
-              ),
-
-              // Summary Tests
               Row(
                 children: [
                   Expanded(
@@ -716,50 +779,6 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                     ),
                   ),
                 ],
-              ),
-
-              // Info Card
-              Card(
-                margin: const EdgeInsets.all(16),
-                elevation: 2,
-                color: Colors.blue.withOpacity(0.1),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.info_outline, color: Colors.blue, size: 20),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Notification Priority Guide',
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.blue,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '🔴 URGENT: Red color, strong vibration, stays until dismissed\n'
-                            '🟡 HIGH: Orange color, medium vibration, heads-up display\n'
-                            '⚪ NORMAL: Default color, standard notification\n'
-                            '🔵 LOW: Minimal styling, no heads-up display\n\n'
-                            '• Summary notifications are sent automatically based on your schedule\n'
-                            '• Deadline reminders are personalized per user\n'
-                            '• Test notifications help you see how each priority looks',
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.blue.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ),
 
               // Clear All Notifications
@@ -813,6 +832,22 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
               const SizedBox(height: 24),
             ],
+          ),
+        ),
+        // Floating save button for easy access
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: _isSaving ? null : _saveSettings,
+          backgroundColor: _isSaving ? Colors.grey : const Color(0xFF006D77),
+          icon: _isSaving
+              ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+          )
+              : const Icon(Icons.save, color: Colors.white),
+          label: Text(
+            _isSaving ? 'Saving...' : 'Save Settings',
+            style: GoogleFonts.poppins(color: Colors.white),
           ),
         ),
       ),

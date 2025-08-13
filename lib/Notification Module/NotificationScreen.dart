@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/notification_model.dart';
+import 'DailySummaryPage.dart'; // Import daily summary page
+import 'WeeklySummaryPage.dart'; // Import weekly summary page
 
 class NotificationScreen extends StatefulWidget {
   const NotificationScreen({super.key});
@@ -330,13 +332,111 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   void _handleNotificationTap(AppNotification notification) {
-    // Handle navigation based on notification type and data
-    if (notification.data.containsKey('jobId')) {
-      // Navigate to job details or task progress
-      print('Navigate to job: ${notification.data['jobId']}');
-    } else if (notification.data.containsKey('taskId')) {
-      // Navigate to task details
-      print('Navigate to task: ${notification.data['taskId']}');
+    // Check if it's a daily or weekly summary notification
+    final notificationType = notification.data['type'] as String?;
+
+    if (notificationType == 'daily_summary') {
+      _navigateToDailySummary(notification);
+    } else if (notificationType == 'weekly_summary') {
+      _navigateToWeeklySummary(notification);
+    } else {
+      // Handle other notification types
+      if (notification.data.containsKey('jobId')) {
+        // Navigate to job details or task progress
+        print('Navigate to job: ${notification.data['jobId']}');
+      } else if (notification.data.containsKey('taskId')) {
+        // Navigate to task details
+        print('Navigate to task: ${notification.data['taskId']}');
+      }
+    }
+  }
+
+  void _navigateToDailySummary(AppNotification notification) {
+    try {
+      final data = notification.data;
+
+      final summaryData = {
+        'date': data['date'] ?? DateTime.now().toIso8601String(),
+        'totalTasks': data['totalTasks'] ?? 0,
+        'completedTasks': data['completedTasks'] ?? 0,
+        'inProgressTasks': data['inProgressTasks'] ?? 0,
+        'pendingTasks': data['pendingTasks'] ?? 0,
+        'pointsEarned': data['pointsEarned'] ?? 0,
+        'totalEarnings': data['totalEarnings'] ?? 0.0,
+        'translationsCount': data['translationsCount'] ?? 0,
+        'taskDetails': data['taskDetails'] ?? <Map<String, dynamic>>[],
+        'pointTransactions': data['pointTransactions'] ?? <Map<String, dynamic>>[],
+        'translationDetails': data['translationDetails'] ?? <Map<String, dynamic>>[],
+        'tasksByCategory': data['tasksByCategory'] ?? <String, int>{},
+        'completionRate': data['completionRate'] ?? 0.0,
+        'isFromNotification': true,
+      };
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => DailySummaryPage(
+            summaryData: summaryData,
+            date: data['date'],
+          ),
+        ),
+      );
+
+      print('Navigated to Daily Summary from notification');
+    } catch (e) {
+      print('Error navigating to daily summary: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to open daily summary: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _navigateToWeeklySummary(AppNotification notification) {
+    try {
+      final data = notification.data;
+
+      final summaryData = {
+        'weekStart': data['weekStart'] ?? DateTime.now().toIso8601String(),
+        'weekEnd': data['weekEnd'] ?? DateTime.now().add(const Duration(days: 7)).toIso8601String(),
+        'totalTasks': data['totalTasks'] ?? 0,
+        'completedTasks': data['completedTasks'] ?? 0,
+        'inProgressTasks': data['inProgressTasks'] ?? 0,
+        'pendingTasks': data['pendingTasks'] ?? 0,
+        'overdueTasks': data['overdueTasks'] ?? 0,
+        'totalPoints': data['totalPoints'] ?? 0,
+        'totalEarnings': data['totalEarnings'] ?? 0.0,
+        'translationsCount': data['translationsCount'] ?? 0,
+        'completionRate': data['completionRate'] ?? 0.0,
+        'tasksByCategory': data['tasksByCategory'] ?? <String, int>{},
+        'averageDailyCompletion': data['averageDailyCompletion'] ?? 0.0,
+        'averageDailyEarnings': data['averageDailyEarnings'] ?? 0.0,
+        'mostProductiveDay': data['mostProductiveDay'] ?? 'N/A',
+        'dailyBreakdown': data['dailyBreakdown'] ?? <Map<String, dynamic>>[],
+        'isFromNotification': true,
+      };
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => WeeklySummaryPage(
+            summaryData: summaryData,
+            weekStart: data['weekStart'],
+          ),
+        ),
+      );
+
+      print('Navigated to Weekly Summary from notification');
+    } catch (e) {
+      print('Error navigating to weekly summary: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to open weekly summary: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -462,6 +562,35 @@ class _NotificationScreenState extends State<NotificationScreen> {
         ),
         body: Column(
           children: [
+            // Add a helpful banner for summary notifications
+            if (notifications.any((n) =>
+            n.data['type'] == 'daily_summary' ||
+                n.data['type'] == 'weekly_summary'))
+              Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Tap on summary notifications to view detailed reports',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.blue.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             Expanded(
               child: isLoading
                   ? const Center(child: CircularProgressIndicator())

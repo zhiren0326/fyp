@@ -52,11 +52,20 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
 
       final data = jobDoc.data()!;
       final acceptedApplicants = List<String>.from(data['acceptedApplicants'] ?? []);
-      final progressValues = <double>[];
 
       print('Found ${acceptedApplicants.length} accepted applicants');
 
+      if (acceptedApplicants.isEmpty) {
+        setState(() {
+          teamPerformanceData = [];
+          overallProgress = 0.0;
+          isLoading = false;
+        });
+        return;
+      }
+
       List<Map<String, dynamic>> performanceList = [];
+      List<double> validProgressValues = [];
 
       for (String applicantId in acceptedApplicants) {
         try {
@@ -82,19 +91,30 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
           }
 
           double progress = 0.0;
-          String status = 'Not Started';
+          String status = 'created';
           bool completionRequested = false;
           bool completionApproved = false;
           String completionNotes = '';
+          bool hasProgressData = false;
+          Timestamp? createdAt; // Add this line
 
           if (progressDoc.exists && progressDoc.data() != null) {
             final progressData = progressDoc.data()!;
             progress = (progressData['currentProgress'] ?? 0.0).toDouble();
-            status = progressData['status'] ?? 'Not Started';
+            status = progressData['status'] ?? 'created';
             completionRequested = progressData['completionRequested'] ?? false;
             completionApproved = progressData['completionApproved'] ?? false;
             completionNotes = progressData['completionNotes'] ?? '';
-            progressValues.add(progress);
+            hasProgressData = true;
+            createdAt = progressData['createdAt'] as Timestamp?; // Add this line
+
+            if (status != 'created' || progress > 0) {
+              validProgressValues.add(progress);
+            }
+          } else {
+            await _createTaskProgressForApplicant(applicantId);
+            validProgressValues.add(0.0);
+            createdAt = Timestamp.now(); // Add this line for newly created tasks
           }
 
           performanceList.add({
@@ -106,43 +126,69 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
             'completionRequested': completionRequested,
             'completionApproved': completionApproved,
             'completionNotes': completionNotes,
+            'hasProgressData': hasProgressData,
+            'createdAt': createdAt, // Add this line
           });
 
-          print('Added performance data for user $name: $progress%');
+          print('Added performance data for user $name: $progress% (Status: $status)');
         } catch (e) {
           print('Error loading data for applicant $applicantId: $e');
-          // Add user with default data if there's an error
           performanceList.add({
             'userId': applicantId,
             'name': 'Error Loading User',
             'progress': 0.0,
-            'status': 'Error',
+            'status': 'error',
             'efficiency': 0.0,
             'completionRequested': false,
             'completionApproved': false,
             'completionNotes': '',
+            'hasProgressData': false,
+            'createdAt': Timestamp.now(), // Add this line
           });
+          validProgressValues.add(0.0);
         }
       }
 
-      final avgProgress = progressValues.isNotEmpty
-          ? progressValues.reduce((a, b) => a + b) / progressValues.length
-          : 0.0;
+      // Sort by creation date (newest first) - Add these lines
+      performanceList.sort((a, b) {
+        final aTime = a['createdAt'] as Timestamp?;
+        final bTime = b['createdAt'] as Timestamp?;
+        if (aTime == null && bTime == null) return 0;
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+        return bTime.compareTo(aTime); // Newest first
+      });
+
+      // Calculate overall progress with improved logic
+      double avgProgress = 0.0;
+      if (validProgressValues.isNotEmpty) {
+        avgProgress = validProgressValues.reduce((a, b) => a + b) / validProgressValues.length;
+      }
+
+      double weightedProgress = _calculateWeightedProgress(performanceList);
+      final finalProgress = (avgProgress + weightedProgress) / 2;
 
       setState(() {
         teamPerformanceData = performanceList;
-        overallProgress = avgProgress;
+        overallProgress = finalProgress;
         isLoading = false;
       });
 
-      print('Team performance loaded successfully. Overall progress: $avgProgress%');
+      print('Team performance loaded successfully. Overall progress: ${finalProgress.toStringAsFixed(2)}%');
+      print('Simple average: ${avgProgress.toStringAsFixed(2)}%, Weighted: ${weightedProgress.toStringAsFixed(2)}%');
 
-      // Update overall progress in jobs collection
+      // Update overall progress in jobs collection with better precision
       try {
         await FirebaseFirestore.instance
             .collection('jobs')
             .doc(widget.jobId)
-            .update({'overallProgress': avgProgress});
+            .update({
+          'overallProgress': double.parse(finalProgress.toStringAsFixed(2)),
+          'progressPercentage': double.parse(finalProgress.toStringAsFixed(2)),
+          'lastProgressUpdate': FieldValue.serverTimestamp(),
+          'teamMemberCount': acceptedApplicants.length,
+          'activeMembers': performanceList.where((m) => m['status'] != 'created' && m['status'] != 'error').length,
+        });
       } catch (e) {
         print('Error updating overall progress: $e');
       }
@@ -155,15 +201,74 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
     }
   }
 
+  // New method to calculate weighted progress based on status and completion
+  double _calculateWeightedProgress(List<Map<String, dynamic>> performanceList) {
+    if (performanceList.isEmpty) return 0.0;
+
+    double totalWeightedProgress = 0.0;
+    double totalWeight = 0.0;
+
+    for (var member in performanceList) {
+      double progress = member['progress'] ?? 0.0;
+      String status = member['status'] ?? 'created';
+      bool completionApproved = member['completionApproved'] ?? false;
+
+      // Assign weights based on status
+      double weight = 1.0;
+      switch (status.toLowerCase()) {
+        case 'completed':
+          weight = 1.2; // Completed tasks get higher weight
+          progress = completionApproved ? 100.0 : progress;
+          break;
+        case 'pendingreview':
+          weight = 1.1; // Tasks pending review get slightly higher weight
+          break;
+        case 'inprogress':
+          weight = 1.0; // Normal weight for in-progress
+          break;
+        case 'paused':
+          weight = 0.8; // Paused tasks get lower weight
+          break;
+        case 'blocked':
+          weight = 0.6; // Blocked tasks get even lower weight
+          break;
+        case 'created':
+        case 'assigned':
+          weight = 0.9; // Not started tasks get slightly lower weight
+          break;
+        case 'error':
+          weight = 0.1; // Error cases get minimal weight
+          break;
+        default:
+          weight = 1.0;
+      }
+
+      totalWeightedProgress += progress * weight;
+      totalWeight += weight;
+    }
+
+    return totalWeight > 0 ? totalWeightedProgress / totalWeight : 0.0;
+  }
+
   double _calculateEfficiency(double progress, String status) {
     switch (status.toLowerCase()) {
-      case 'completed': return 100.0;
-      case 'inprogress': return progress * 0.8;
-      case 'pendingreview': return progress * 0.9;
-      case 'paused': return progress * 0.5;
-      case 'blocked': return progress * 0.4;
-      case 'not started': return 0.0;
-      default: return progress * 0.7;
+      case 'completed':
+        return 100.0;
+      case 'pendingreview':
+        return progress * 0.95; // High efficiency for pending review
+      case 'inprogress':
+        return progress * 0.85; // Good efficiency for active work
+      case 'assigned':
+      case 'created':
+        return progress * 0.7; // Lower efficiency for not started
+      case 'paused':
+        return progress * 0.5; // Reduced efficiency for paused
+      case 'blocked':
+        return progress * 0.3; // Low efficiency for blocked
+      case 'error':
+        return 0.0; // No efficiency for errors
+      default:
+        return progress * 0.7;
     }
   }
 
@@ -482,70 +587,6 @@ class _ManageApplicantsPageState extends State<ManageApplicantsPage> {
       Navigator.of(context).pop(); // Close loading dialog
       print('Error accepting multiple applicants: $e');
       _showSnackBar('Error accepting applicants: $e');
-    }
-  }
-
-  Future<void> _updateJobDeadlineForAllEmployees(DateTime newDeadline) async {
-    try {
-      final jobDocRef = FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
-      final jobDoc = await jobDocRef.get();
-
-      if (!jobDoc.exists) {
-        _showSnackBar('Job not found.');
-        return;
-      }
-
-      final data = jobDoc.data()!;
-      final acceptedApplicants = List<String>.from(data['acceptedApplicants'] ?? []);
-
-      // Update the deadline in the job document
-      final newEndDate = newDeadline.toLocal().toString().split(' ')[0];
-      final newEndTime = '${newDeadline.hour.toString().padLeft(2, '0')}:${newDeadline.minute.toString().padLeft(2, '0')}';
-
-      await jobDocRef.update({
-        'endDate': newEndDate,
-        'endTime': newEndTime,
-        'lastUpdated': FieldValue.serverTimestamp(),
-      });
-
-      // Reschedule deadline notifications for all accepted employees
-      if (acceptedApplicants.isNotEmpty && newDeadline.isAfter(DateTime.now())) {
-        print('Rescheduling deadline notifications for ${acceptedApplicants.length} employees');
-
-        final currentUser = FirebaseAuth.instance.currentUser;
-        await NotificationService().scheduleDeadlineRemindersForEmployees(
-          taskId: widget.jobId,
-          taskTitle: widget.jobPosition,
-          deadline: newDeadline,
-          employeeIds: acceptedApplicants,
-          employerUserId: currentUser?.uid,
-        );
-
-        // Notify employees about the deadline change
-        for (String employeeId in acceptedApplicants) {
-          await NotificationService().sendRealTimeNotification(
-            userId: employeeId,
-            title: '📅 Deadline Updated',
-            body: 'The deadline for "${widget.jobPosition}" has been updated to ${newDeadline.toLocal().toString().split('.')[0]}',
-            data: {
-              'type': NotificationService.typeStatusChanged,
-              'jobId': widget.jobId,
-              'jobTitle': widget.jobPosition,
-              'action': 'deadline_updated',
-              'newDeadline': newDeadline.toIso8601String(),
-              'timestamp': DateTime.now().toIso8601String(),
-            },
-            priority: NotificationPriority.high,
-          );
-        }
-      }
-
-      _showSnackBar('Deadline updated and notifications rescheduled for all employees.');
-      print('Job deadline updated and notifications rescheduled');
-
-    } catch (e) {
-      print('Error updating job deadline: $e');
-      _showSnackBar('Error updating deadline: $e');
     }
   }
 

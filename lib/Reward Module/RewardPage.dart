@@ -6,6 +6,8 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'BadgesPage.dart';
 import 'MoneyPage.dart';
+import 'PointsHistoryPage.dart'; // Add this import
+import 'RedemptionHistoryPage.dart'; // Add this import
 
 class RewardsPage extends StatefulWidget {
   const RewardsPage({super.key});
@@ -19,6 +21,7 @@ class _RewardsPageState extends State<RewardsPage> {
   List<Map<String, dynamic>> _topPerformers = [];
   bool _isLoading = true;
   bool _isRedeeming = false;
+  String? _currentUserId;
 
   final List<Map<String, dynamic>> _redeemableItems = [
     {
@@ -80,7 +83,31 @@ class _RewardsPageState extends State<RewardsPage> {
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _initializeUser();
+  }
+
+  Future<void> _initializeUser() async {
+    try {
+      User? currentUser = FirebaseAuth.instance.currentUser;
+
+      if (currentUser == null) {
+        UserCredential userCredential = await FirebaseAuth.instance.signInAnonymously();
+        currentUser = userCredential.user;
+      }
+
+      if (currentUser != null) {
+        setState(() {
+          _currentUserId = currentUser!.uid;
+        });
+        print('RewardsPage - Initialized user: ${currentUser.uid}');
+        _loadData();
+      } else {
+        setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      print('Error initializing user: $e');
+      setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _loadData() async {
@@ -93,20 +120,22 @@ class _RewardsPageState extends State<RewardsPage> {
 
   Future<void> _loadUserPoints() async {
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
+      if (_currentUserId == null) return;
 
       final doc = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(_currentUserId)
           .collection('profiledetails')
           .doc('profile')
           .get();
 
       if (doc.exists) {
+        final data = doc.data()!;
         setState(() {
-          _userPoints = (doc.data()?['points'] ?? 0) as int;
+          // Try both 'totalPoints' and 'points' field names for compatibility
+          _userPoints = (data['totalPoints'] ?? data['points'] ?? 0) as int;
         });
+        print('User points loaded: $_userPoints');
       }
     } catch (e) {
       print('Error loading user points: $e');
@@ -134,7 +163,8 @@ class _RewardsPageState extends State<RewardsPage> {
 
           if (profileDoc.exists) {
             final profileData = profileDoc.data()!;
-            final points = (profileData['points'] ?? 0) as int;
+            // Try both 'totalPoints' and 'points' field names for compatibility
+            final points = (profileData['totalPoints'] ?? profileData['points'] ?? 0) as int;
 
             if (points > 0) {
               performers.add({
@@ -265,32 +295,34 @@ class _RewardsPageState extends State<RewardsPage> {
     setState(() => _isRedeeming = true);
 
     try {
-      final user = FirebaseAuth.instance.currentUser!;
+      if (_currentUserId == null) throw Exception('User not authenticated');
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
         // Deduct points from user
         final profileRef = FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .doc(_currentUserId)
             .collection('profiledetails')
             .doc('profile');
 
         final profileDoc = await transaction.get(profileRef);
-        final currentPoints = (profileDoc.data()?['points'] ?? 0) as int;
+        final profileData = profileDoc.data();
+        // Try both 'totalPoints' and 'points' field names for compatibility
+        final currentPoints = (profileData?['totalPoints'] ?? profileData?['points'] ?? 0) as int;
 
         if (currentPoints < item['points']) {
           throw Exception('Insufficient points');
         }
 
         transaction.update(profileRef, {
-          'points': currentPoints - item['points'],
+          'totalPoints': currentPoints - item['points'],
           'lastPointsUpdate': Timestamp.now(),
         });
 
         // Add redemption record
         final redemptionRef = FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .doc(_currentUserId)
             .collection('redemptions')
             .doc();
 
@@ -308,7 +340,7 @@ class _RewardsPageState extends State<RewardsPage> {
         // Add to points history
         final pointsHistoryRef = FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .doc(_currentUserId)
             .collection('pointsHistory')
             .doc();
 
@@ -454,6 +486,7 @@ class _RewardsPageState extends State<RewardsPage> {
             ),
           ),
           const SizedBox(height: 16),
+          // First row - 2 cards
           Row(
             children: [
               Expanded(
@@ -478,6 +511,37 @@ class _RewardsPageState extends State<RewardsPage> {
                       () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (context) => const BadgesPage()),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Second row - 2 new cards
+          Row(
+            children: [
+              Expanded(
+                child: _buildActionCard(
+                  'Points History',
+                  'Track points earned/spent',
+                  Icons.history,
+                  Colors.purple,
+                      () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const PointsHistoryPage()),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildActionCard(
+                  'My Rewards',
+                  'View redeemed items',
+                  Icons.redeem,
+                  Colors.orange,
+                      () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const RedemptionHistoryPage()),
                   ),
                 ),
               ),
@@ -555,10 +619,6 @@ class _RewardsPageState extends State<RewardsPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.pop(context),
-                ),
                 Text(
                   'Rewards',
                   style: GoogleFonts.poppins(
@@ -570,7 +630,16 @@ class _RewardsPageState extends State<RewardsPage> {
                 const SizedBox(width: 48), // Balance the back button
               ],
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 8),
+            if (_currentUserId != null)
+              Text(
+                'User: ${_currentUserId!.substring(0, 8)}...',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: Colors.white.withOpacity(0.8),
+                ),
+              ),
+            const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -744,8 +813,6 @@ class _RewardsPageState extends State<RewardsPage> {
     );
   }
 
-  // Replace your reward item builder in the GridView with this fixed version:
-
   Widget _buildRewardItem(Map<String, dynamic> item, bool canAfford) {
     return GestureDetector(
       onTap: _isRedeeming || !canAfford ? null : () => _redeemItem(item),
@@ -762,7 +829,7 @@ class _RewardsPageState extends State<RewardsPage> {
           ],
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min, // Add this
+          mainAxisSize: MainAxisSize.min,
           children: [
             // Icon and points section
             Expanded(
@@ -778,27 +845,27 @@ class _RewardsPageState extends State<RewardsPage> {
                 ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min, // Add this
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
                       item['icon'],
-                      size: 36, // Reduced from 40
+                      size: 36,
                       color: canAfford ? item['color'] : Colors.grey,
                     ),
-                    const SizedBox(height: 6), // Reduced from 8
+                    const SizedBox(height: 6),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
                           Icons.stars,
-                          size: 14, // Reduced from 16
+                          size: 14,
                           color: canAfford ? Colors.amber : Colors.grey,
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          '${item['points']} pts', // Shortened text
+                          '${item['points']} pts',
                           style: GoogleFonts.poppins(
-                            fontSize: 11, // Reduced from 12
+                            fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: canAfford ? item['color'] : Colors.grey,
                           ),
@@ -813,17 +880,17 @@ class _RewardsPageState extends State<RewardsPage> {
             Expanded(
               flex: 2,
               child: Padding(
-                padding: const EdgeInsets.all(8), // Reduced from 12
+                padding: const EdgeInsets.all(8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min, // Add this
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     // Title
-                    Flexible( // Wrap with Flexible
+                    Flexible(
                       child: Text(
                         item['name'],
                         style: GoogleFonts.poppins(
-                          fontSize: 13, // Reduced from 14
+                          fontSize: 13,
                           fontWeight: FontWeight.bold,
                           color: canAfford ? Colors.black : Colors.grey,
                         ),
@@ -836,7 +903,7 @@ class _RewardsPageState extends State<RewardsPage> {
                     if (_isRedeeming)
                       const Center(
                         child: SizedBox(
-                          height: 18, // Reduced from 20
+                          height: 18,
                           width: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         ),
@@ -844,7 +911,7 @@ class _RewardsPageState extends State<RewardsPage> {
                     else
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 6), // Reduced from 8
+                        padding: const EdgeInsets.symmetric(vertical: 6),
                         decoration: BoxDecoration(
                           color: canAfford ? item['color'] : Colors.grey[300],
                           borderRadius: BorderRadius.circular(6),
@@ -852,7 +919,7 @@ class _RewardsPageState extends State<RewardsPage> {
                         child: Text(
                           canAfford ? 'Redeem' : 'Need ${item['points'] - _userPoints}',
                           style: GoogleFonts.poppins(
-                            fontSize: 10, // Reduced from 11
+                            fontSize: 10,
                             fontWeight: FontWeight.w600,
                             color: canAfford ? Colors.white : Colors.grey[600],
                           ),
@@ -871,7 +938,6 @@ class _RewardsPageState extends State<RewardsPage> {
     );
   }
 
-// Updated GridView builder method
   Widget _buildRedeemRewards() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
@@ -912,7 +978,7 @@ class _RewardsPageState extends State<RewardsPage> {
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              childAspectRatio: 0.9, // Increased from 0.85 to give more height
+              childAspectRatio: 0.9,
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
             ),
@@ -933,12 +999,23 @@ class _RewardsPageState extends State<RewardsPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF006D77)),
+            ),
+            SizedBox(height: 16),
+            Text('Loading rewards...'),
+          ],
+        ),
+      )
           : SingleChildScrollView(
         child: Column(
           children: [
             _buildHeader(),
-            _buildQuickActions(),
+            _buildQuickActions(), // Now has 4 action cards including new history pages
             _buildTopPerformers(),
             _buildRedeemRewards(),
             const SizedBox(height: 20),

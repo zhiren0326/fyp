@@ -48,13 +48,34 @@ class _PomodoroTimerPageState extends State<PomodoroTimerPage>
     'completedTasks': 0,
   };
 
+  // Separated task lists
+  List<Task> _activeTasks = [];
+  List<Task> _completedTasks = [];
+
   @override
   void initState() {
     super.initState();
+    _separateTasksByCompletion();
     _initializeAnimations();
     _loadDailyStats();
     _calculateTotalPomodoros();
     _remainingTime = _workDuration;
+    _findNextActiveTask();
+  }
+
+  void _separateTasksByCompletion() {
+    _activeTasks = widget.tasks.where((task) => !task.isCompleted).toList();
+    _completedTasks = widget.tasks.where((task) => task.isCompleted).toList();
+  }
+
+  void _findNextActiveTask() {
+    // Find the first non-completed task as the current task
+    for (int i = 0; i < _activeTasks.length; i++) {
+      if (!_activeTasks[i].isCompleted) {
+        _currentTaskIndex = i;
+        break;
+      }
+    }
   }
 
   void _initializeAnimations() {
@@ -80,7 +101,7 @@ class _PomodoroTimerPageState extends State<PomodoroTimerPage>
   }
 
   void _calculateTotalPomodoros() {
-    _totalPomodoros = widget.tasks.fold(0, (sum, task) {
+    _totalPomodoros = _activeTasks.fold(0, (sum, task) {
       return sum + (task.estimatedDuration / 25).ceil();
     });
   }
@@ -316,7 +337,7 @@ class _PomodoroTimerPageState extends State<PomodoroTimerPage>
         ? 1.0 - (_remainingTime / _shortBreakDuration)
         : 1.0 - (_remainingTime / _longBreakDuration);
 
-    return Container(
+    return SizedBox(
       width: 300,
       height: 300,
       child: Stack(
@@ -377,11 +398,11 @@ class _PomodoroTimerPageState extends State<PomodoroTimerPage>
                         color: Colors.grey[600],
                       ),
                     ),
-                    if (widget.tasks.isNotEmpty && _currentTaskIndex < widget.tasks.length)
+                    if (_activeTasks.isNotEmpty && _currentTaskIndex < _activeTasks.length)
                       Padding(
                         padding: const EdgeInsets.only(top: 16),
                         child: Text(
-                          widget.tasks[_currentTaskIndex].title,
+                          _activeTasks[_currentTaskIndex].title,
                           style: GoogleFonts.poppins(
                             fontSize: 14,
                             color: Colors.grey[500],
@@ -448,7 +469,7 @@ class _PomodoroTimerPageState extends State<PomodoroTimerPage>
             LinearProgressIndicator(
               value: _totalPomodoros > 0 ? _completedPomodoros / _totalPomodoros : 0,
               backgroundColor: Colors.grey[300],
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.green),
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
             ),
             const SizedBox(height: 8),
             Text(
@@ -516,82 +537,212 @@ class _PomodoroTimerPageState extends State<PomodoroTimerPage>
   }
 
   Widget _buildTaskList() {
-    if (widget.tasks.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
     return Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(12),
-                topRight: Radius.circular(12),
-              ),
-            ),
-            child: Text(
-              'Tasks (${widget.tasks.length})',
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: Colors.blue[700],
-              ),
-            ),
-          ),
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: widget.tasks.length,
-            itemBuilder: (context, index) {
-              final task = widget.tasks[index];
-              final isCurrentTask = index == _currentTaskIndex;
-              final estimatedPomodoros = (task.estimatedDuration / 25).ceil();
-
-              return Container(
-                decoration: BoxDecoration(
-                  color: isCurrentTask ? Colors.blue[50] : null,
-                  border: isCurrentTask
-                      ? Border.all(color: Colors.blue[300]!, width: 2)
-                      : null,
+          // Active Tasks Section
+          if (_activeTasks.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
                 ),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: isCurrentTask ? Colors.blue : Colors.grey[300],
-                    child: Text(
-                      '${index + 1}',
-                      style: TextStyle(
-                        color: isCurrentTask ? Colors.white : Colors.grey[600],
-                        fontWeight: FontWeight.bold,
+              ),
+              child: Text(
+                'Active Tasks (${_activeTasks.length})',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.blue[700],
+                ),
+              ),
+            ),
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _activeTasks.length,
+              itemBuilder: (context, index) {
+                final task = _activeTasks[index];
+                final isCurrentTask = index == _currentTaskIndex;
+                final estimatedPomodoros = (task.estimatedDuration / 25).ceil();
+                final isJobTask = task.id.startsWith('job_');
+
+                return Container(
+                  decoration: BoxDecoration(
+                    color: isCurrentTask ? Colors.blue[50] : null,
+                    border: isCurrentTask
+                        ? Border.all(color: Colors.blue[300]!, width: 2)
+                        : null,
+                  ),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: isCurrentTask ? Colors.blue : Colors.grey[300],
+                      child: Text(
+                        '${index + 1}',
+                        style: TextStyle(
+                          color: isCurrentTask ? Colors.white : Colors.grey[600],
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                  ),
-                  title: Text(
-                    task.title,
-                    style: GoogleFonts.poppins(
-                      fontWeight: isCurrentTask ? FontWeight.w600 : FontWeight.normal,
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            task.title,
+                            style: GoogleFonts.poppins(
+                              fontWeight: isCurrentTask ? FontWeight.w600 : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                        if (isJobTask)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.blue[100],
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'JOB',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue[700],
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
+                    subtitle: Text(
+                      '${task.category} • $estimatedPomodoros Pomodoro${estimatedPomodoros > 1 ? 's' : ''}',
+                      style: GoogleFonts.poppins(fontSize: 12),
+                    ),
+                    trailing: isCurrentTask
+                        ? const Icon(Icons.play_circle_filled, color: Colors.blue)
+                        : null,
+                    onTap: () {
+                      if (!_isRunning) {
+                        setState(() => _currentTaskIndex = index);
+                      }
+                    },
+                  ),
+                );
+              },
+            ),
+          ],
+
+          // Completed Tasks Section
+          if (_completedTasks.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: _activeTasks.isEmpty
+                    ? const BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
+                )
+                    : BorderRadius.zero,
+              ),
+              child: Text(
+                'Completed Tasks (${_completedTasks.length})',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.green[700],
+                ),
+              ),
+            ),
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _completedTasks.length,
+              itemBuilder: (context, index) {
+                final task = _completedTasks[index];
+                final estimatedPomodoros = (task.estimatedDuration / 25).ceil();
+                final isJobTask = task.id.startsWith('job_');
+
+                return ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.green[300],
+                    child: const Icon(Icons.check, color: Colors.white),
+                  ),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          task.title,
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.normal,
+                            decoration: TextDecoration.lineThrough,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                      if (isJobTask)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'JOB',
+                            style: GoogleFonts.poppins(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ),
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.green[100],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'COMPLETED',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green[700],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   subtitle: Text(
                     '${task.category} • $estimatedPomodoros Pomodoro${estimatedPomodoros > 1 ? 's' : ''}',
-                    style: GoogleFonts.poppins(fontSize: 12),
+                    style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[500]),
                   ),
-                  trailing: isCurrentTask
-                      ? Icon(Icons.play_circle_filled, color: Colors.blue)
-                      : null,
-                  onTap: () {
-                    if (!_isRunning) {
-                      setState(() => _currentTaskIndex = index);
-                    }
-                  },
-                ),
-              );
-            },
-          ),
+                );
+              },
+            ),
+          ],
+
+          if (_activeTasks.isEmpty && _completedTasks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                children: [
+                  Icon(Icons.task_alt, size: 48, color: Colors.grey[400]),
+                  const SizedBox(height: 8),
+                  Text(
+                    'No tasks available',
+                    style: GoogleFonts.poppins(color: Colors.grey[600]),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -724,7 +875,8 @@ class _PomodoroTimerPageState extends State<PomodoroTimerPage>
                           '1. Work for 25 minutes\n'
                           '2. Take a 5-minute break\n'
                           '3. After 4 pomodoros, take a 15-30 minute break\n\n'
-                          'This helps maintain focus and prevents burnout.',
+                          'This helps maintain focus and prevents burnout.\n\n'
+                          'Note: Only active (non-completed) tasks are available for Pomodoro sessions.',
                     ),
                     actions: [
                       TextButton(
