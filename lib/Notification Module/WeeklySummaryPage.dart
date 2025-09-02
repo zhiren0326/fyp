@@ -1,9 +1,9 @@
-// Updated WeeklySummaryPage.dart - Removed user level references and fixed data fetching
+// Fixed WeeklySummaryPage.dart - Corrected user authentication and data fetching
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'UserDataService.dart'; // Import the updated service
+import 'UserDataService.dart';
 
 class WeeklySummaryPage extends StatefulWidget {
   final Map<String, dynamic>? summaryData;
@@ -25,6 +25,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
   DateTime _selectedWeekStart = DateTime.now();
   List<Map<String, dynamic>> _dailyBreakdown = [];
   String? _currentUserId;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -37,99 +38,462 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
     _initializeUser();
   }
 
+  // FIXED: Proper user authentication without creating new anonymous users
   Future<void> _initializeUser() async {
     try {
       User? currentUser = FirebaseAuth.instance.currentUser;
 
+      // Don't create anonymous users - use existing authenticated user
       if (currentUser == null) {
-        UserCredential userCredential = await FirebaseAuth.instance.signInAnonymously();
-        currentUser = userCredential.user;
+        print('ERROR: No authenticated user found');
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Please log in first to view weekly summary';
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Please log in first to view weekly summary'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
       }
 
-      if (currentUser != null) {
+      setState(() {
+        _currentUserId = currentUser.uid;
+      });
+
+      print('=== WEEKLY SUMMARY DEBUG INFO ===');
+      print('Current User ID: ${currentUser.uid}');
+      print('Expected User ID (from Firebase): N84HVhnPOQeSmozIVDuckPfMfua2');
+      print('User IDs match: ${currentUser.uid ==
+          "N84HVhnPOQeSmozIVDuckPfMfua2"}');
+      print('Selected week start: $_selectedWeekStart');
+      print('Week end: ${_selectedWeekStart.add(const Duration(days: 7))}');
+
+      // IMPORTANT: If they don't match, this is the problem!
+      if (currentUser.uid != "N84HVhnPOQeSmozIVDuckPfMfua2") {
+        print(
+            'WARNING: Current user is different from the user with data in Firebase!');
+        print('You need to authenticate as user N84HVhnPOQeSmozIVDuckPfMfua2');
+      }
+      print('===================================');
+
+      // Check if user has data before proceeding
+      final userDataSummary = await UserDataService.getUserDataSummary(
+          currentUser.uid);
+      print('User data summary: $userDataSummary');
+
+      final hasData = userDataSummary['dataAvailable'] as bool? ?? false;
+      print('User has data: $hasData');
+
+      if (!hasData) {
+        print('User ${currentUser.uid} has no data available');
         setState(() {
-          _currentUserId = currentUser!.uid;
+          _summaryData = null;
+          _dailyBreakdown = [];
+          _isLoading = false;
+          _errorMessage =
+          'No data found for current user. Make sure you are logged in as the correct user.';
         });
+        return;
+      }
 
-        print('Initialized user: ${currentUser.uid}');
-
-        if (widget.summaryData != null) {
-          _summaryData = widget.summaryData;
-          _dailyBreakdown = widget.summaryData?['dailyBreakdown'] ?? [];
-          setState(() => _isLoading = false);
-        } else {
-          _loadWeeklySummary();
-        }
+      if (widget.summaryData != null) {
+        _summaryData = widget.summaryData;
+        _dailyBreakdown = widget.summaryData?['dailyBreakdown'] ?? [];
+        setState(() {
+          _isLoading = false;
+          _errorMessage = null;
+        });
       } else {
-        setState(() => _isLoading = false);
+        await _loadWeeklySummary();
       }
     } catch (e) {
       print('Error initializing user: $e');
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Error initializing user: ${e.toString()}';
+      });
     }
   }
 
   DateTime _getWeekStart(DateTime date) {
     final daysFromMonday = (date.weekday - 1) % 7;
-    return DateTime(date.year, date.month, date.day).subtract(Duration(days: daysFromMonday));
+    return DateTime(date.year, date.month, date.day).subtract(
+        Duration(days: daysFromMonday));
   }
 
+  // Enhanced _loadWeeklySummary with better error handling and debugging
   Future<void> _loadWeeklySummary() async {
     if (_currentUserId == null) {
       print('No current user ID available');
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'No user ID available';
+      });
       return;
     }
 
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
 
     try {
-      print('Loading weekly summary for user: $_currentUserId starting $_selectedWeekStart');
+      print('=== LOADING WEEKLY SUMMARY ===');
+      print('User ID: $_currentUserId');
+      print('Week start: $_selectedWeekStart');
+      print('Week end: ${_selectedWeekStart.add(const Duration(days: 7))}');
 
-      // Check if user has any data
-      final hasData = await UserDataService.userHasData(_currentUserId!);
-      if (!hasData) {
+      // First, let's debug what data is actually available
+      await _debugDataFetching();
+
+      // Check if user has any data first
+      final userDataSummary = await UserDataService.getUserDataSummary(
+          _currentUserId!);
+      print('User data summary: $userDataSummary');
+
+      if (!(userDataSummary['dataAvailable'] as bool? ?? false)) {
         print('User has no data available');
         setState(() {
           _summaryData = null;
           _dailyBreakdown = [];
           _isLoading = false;
+          _errorMessage = 'No data found for this user';
         });
         return;
       }
 
-      // Use the updated service to generate user-specific summary
+      // Generate weekly summary
+      print('Generating weekly summary...');
       final summaryData = await UserDataService.generateWeeklySummaryForUser(
         userId: _currentUserId!,
         weekStart: _selectedWeekStart,
       );
 
+      print('=== WEEKLY SUMMARY RESULTS ===');
+      print('Summary data received: ${summaryData.isNotEmpty}');
+      print('Total tasks: ${summaryData['totalTasks']}');
+      print('Total points: ${summaryData['totalPoints']}');
+      print('Total earnings: ${summaryData['totalEarnings']}');
+      print('Daily breakdown length: ${(summaryData['dailyBreakdown'] as List?)
+          ?.length ?? 0}');
+      print('User name: ${summaryData['userName']}');
+
+      if (summaryData.containsKey('error')) {
+        print('Error in summary data: ${summaryData['error']}');
+      }
+      print('================================');
+
       setState(() {
         _summaryData = summaryData;
-        _dailyBreakdown = summaryData['dailyBreakdown'] as List<Map<String, dynamic>>? ?? [];
+        _dailyBreakdown =
+            summaryData['dailyBreakdown'] as List<Map<String, dynamic>>? ?? [];
         _isLoading = false;
+        _errorMessage = summaryData.containsKey('error')
+            ? summaryData['error'] as String?
+            : null;
       });
 
-      print('Weekly summary loaded successfully: ${summaryData['totalTasks']} tasks, ${summaryData['totalPoints']} points, ${summaryData['userName']}');
+      // Enhanced logging
+      final totalTasks = summaryData['totalTasks'] as int? ?? 0;
+      final totalPoints = summaryData['totalPoints'] as int? ?? 0;
+      final totalEarnings = summaryData['totalEarnings'] as double? ?? 0.0;
+      final userName = summaryData['userName'] as String? ?? 'User';
+      final completionRate = summaryData['completionRate'] as double? ?? 0.0;
 
+      print('Weekly summary loaded successfully:');
+      print('  - Tasks: $totalTasks');
+      print('  - Points: $totalPoints');
+      print('  - Earnings: RM${totalEarnings.toStringAsFixed(2)}');
+      print('  - Completion: ${completionRate.toStringAsFixed(1)}%');
+      print('  - User: $userName');
     } catch (e) {
-      print('Error loading weekly summary: $e');
+      print('ERROR loading weekly summary: $e');
+      print('Stack trace: ${StackTrace.current}');
+
       setState(() {
         _summaryData = null;
         _dailyBreakdown = [];
         _isLoading = false;
+        _errorMessage = 'Error loading weekly summary: ${e.toString()}';
       });
 
-      // Show error to user
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error loading weekly summary: ${e.toString()}'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
           ),
         );
       }
     }
+  }
+
+  // Debug method to check what data is actually available
+  Future<void> _debugDataFetching() async {
+    if (_currentUserId == null) return;
+
+    try {
+      print('=== DEBUG DATA FETCHING ===');
+
+      // Test points history
+      final pointsData = await UserDataService.fetchUserPointsHistory(
+        userId: _currentUserId!,
+        startDate: _selectedWeekStart,
+        endDate: _selectedWeekStart.add(const Duration(days: 7)),
+      );
+      print('Points data fetched: ${pointsData.length} records');
+      for (var point in pointsData.take(3)) { // Show first 3 records
+        print(
+            '  - ${point['taskTitle']}: ${point['points']} points at ${point['timestamp']}');
+      }
+
+      // Test money history
+      final moneyData = await UserDataService.fetchUserMoneyHistory(
+        userId: _currentUserId!,
+        startDate: _selectedWeekStart,
+        endDate: _selectedWeekStart.add(const Duration(days: 7)),
+      );
+      print('Money data fetched: ${moneyData.length} records');
+      for (var money in moneyData.take(3)) { // Show first 3 records
+        print(
+            '  - ${money['taskTitle']}: RM${money['amount']} at ${money['timestamp']}');
+      }
+
+      // Test profile
+      final profile = await UserDataService.fetchUserProfileDetails(
+          userId: _currentUserId!);
+      print('Profile data: ${profile != null ? 'Found' : 'Not found'}');
+      if (profile != null) {
+        print('  - Name: ${profile['name']}');
+        print('  - Total Points: ${profile['totalPoints']}');
+        print('  - Total Earnings: ${profile['totalEarnings']}');
+      }
+
+      print('========================');
+    } catch (e) {
+      print('Debug data fetching error: $e');
+    }
+  }
+
+  Widget _buildWeekNavigationCard() {
+    final weekEnd = _selectedWeekStart.add(const Duration(days: 6));
+
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.date_range, color: Colors.blue[600], size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Week Selection',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blue[600],
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: Icon(Icons.chevron_left, color: Colors.grey[600]),
+                  onPressed: () {
+                    setState(() {
+                      _selectedWeekStart =
+                          _selectedWeekStart.subtract(const Duration(days: 7));
+                    });
+                    _loadWeeklySummary();
+                  },
+                  tooltip: 'Previous Week',
+                ),
+                IconButton(
+                  icon: Icon(
+                      Icons.calendar_today, color: const Color(0xFF006D77)),
+                  onPressed: _selectWeek,
+                  tooltip: 'Select Week',
+                ),
+                IconButton(
+                  icon: Icon(
+                      Icons.chevron_right,
+                      color: _selectedWeekStart.add(const Duration(days: 7))
+                          .isBefore(DateTime.now())
+                          ? Colors.grey[600]
+                          : Colors.grey[300]
+                  ),
+                  onPressed: _selectedWeekStart.add(const Duration(days: 7))
+                      .isBefore(DateTime.now())
+                      ? () {
+                    setState(() {
+                      _selectedWeekStart =
+                          _selectedWeekStart.add(const Duration(days: 7));
+                    });
+                    _loadWeeklySummary();
+                  }
+                      : null,
+                  tooltip: 'Next Week',
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _formatWeekRange(_selectedWeekStart),
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: const Color(0xFF006D77),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${_formatDate(weekEnd)} (${_getDaysAgo(
+                  _selectedWeekStart)} ago)',
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getDaysAgo(DateTime weekStart) {
+    final now = DateTime.now();
+    final currentWeekStart = _getWeekStart(now);
+    final diffDays = currentWeekStart
+        .difference(weekStart)
+        .inDays;
+
+    if (diffDays == 0) return 'This week';
+    if (diffDays == 7) return '1 week';
+    if (diffDays < 30) return '${(diffDays / 7).round()} weeks';
+    if (diffDays < 365) return '${(diffDays / 30).round()} months';
+    return '${(diffDays / 365).round()} years';
+  }
+
+  String _formatDate(DateTime date) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[date.month - 1]} ${date.day}';
+  }
+
+  // Enhanced error display
+  Widget _buildErrorState() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          children: [
+            Icon(Icons.error_outline, size: 64, color: Colors.red[400]),
+            const SizedBox(height: 16),
+            Text(
+              'Unable to Load Data',
+              style: GoogleFonts.poppins(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.red[700],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _errorMessage ?? 'Unknown error occurred',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.grey[700],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            if (_currentUserId != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[200]!),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Debug Info:',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Current User: $_currentUserId',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.blue[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    Text(
+                      'Expected User: N84HVhnPOQeSmozIVDuckPfMfua2',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.blue[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: _loadWeeklySummary,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF006D77),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    'Retry',
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton(
+                  onPressed: () => _debugDataFetching(),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF006D77)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    'Debug Data',
+                    style: GoogleFonts.poppins(color: const Color(0xFF006D77)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _selectWeek() async {
@@ -168,9 +532,11 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     if (weekStart.month == weekEnd.month) {
-      return '${months[weekStart.month - 1]} ${weekStart.day} - ${weekEnd.day}, ${weekStart.year}';
+      return '${months[weekStart.month - 1]} ${weekStart.day} - ${weekEnd
+          .day}, ${weekStart.year}';
     } else {
-      return '${months[weekStart.month - 1]} ${weekStart.day} - ${months[weekEnd.month - 1]} ${weekEnd.day}, ${weekStart.year}';
+      return '${months[weekStart.month - 1]} ${weekStart.day} - ${months[weekEnd
+          .month - 1]} ${weekEnd.day}, ${weekStart.year}';
     }
   }
 
@@ -307,7 +673,8 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Overall Completion: ${(_summaryData!['completionRate'] as double? ?? 0.0).toStringAsFixed(1)}%',
+              'Overall Completion: ${(_summaryData!['completionRate'] as double? ??
+                  0.0).toStringAsFixed(1)}%',
               style: GoogleFonts.poppins(
                 fontSize: 14,
                 color: Colors.white.withOpacity(0.9),
@@ -325,580 +692,105 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
     );
   }
 
-  Widget _buildDailyChart() {
-    if (_dailyBreakdown.isEmpty) return const SizedBox.shrink();
-
+  Widget _buildEmptyState() {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(32),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Icon(Icons.calendar_view_week_outlined, size: 64,
+                color: Colors.grey[400]),
+            const SizedBox(height: 16),
             Text(
-              'Daily Progress',
+              'No weekly data found',
               style: GoogleFonts.poppins(
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
-                color: const Color(0xFF006D77),
+                color: Colors.grey[700],
               ),
+              textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 200,
-              child: LineChart(
-                LineChartData(
-                  gridData: FlGridData(show: true, drawVerticalLine: false),
-                  titlesData: FlTitlesData(
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 40,
-                        getTitlesWidget: (value, meta) {
-                          return Text(
-                            '${value.toInt()}%',
-                            style: GoogleFonts.poppins(fontSize: 10),
-                          );
-                        },
-                      ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          if (value.toInt() >= 0 && value.toInt() < _dailyBreakdown.length) {
-                            final dayName = _dailyBreakdown[value.toInt()]['dayName'] as String? ?? '';
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                dayName.length >= 3 ? dayName.substring(0, 3) : dayName,
-                                style: GoogleFonts.poppins(fontSize: 10),
-                              ),
-                            );
-                          }
-                          return const Text('');
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  ),
-                  borderData: FlBorderData(show: false),
-                  minX: 0,
-                  maxX: 6,
-                  minY: 0,
-                  maxY: 100,
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: _dailyBreakdown.asMap().entries.map((entry) {
-                        final completionRate = entry.value['completionRate'] as double? ?? 0.0;
-                        return FlSpot(entry.key.toDouble(), completionRate);
-                      }).toList(),
-                      isCurved: true,
-                      color: const Color(0xFF006D77),
-                      barWidth: 3,
-                      dotData: const FlDotData(show: true),
-                      belowBarData: BarAreaData(
-                        show: true,
-                        color: const Color(0xFF006D77).withOpacity(0.1),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPointsChart() {
-    if (_dailyBreakdown.isEmpty) return const SizedBox.shrink();
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+            const SizedBox(height: 8),
             Text(
-              'Daily Points Earned',
+              'No activities found for the week of ${_formatWeekRange(
+                  _selectedWeekStart)}',
               style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF006D77),
+                fontSize: 14,
+                color: Colors.grey[600],
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
-            SizedBox(
-              height: 200,
-              child: BarChart(
-                BarChartData(
-                  gridData: FlGridData(show: true, drawVerticalLine: false),
-                  titlesData: FlTitlesData(
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 40,
-                        getTitlesWidget: (value, meta) {
-                          return Text(
-                            value.toInt().toString(),
-                            style: GoogleFonts.poppins(fontSize: 10),
-                          );
-                        },
-                      ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          if (value.toInt() >= 0 && value.toInt() < _dailyBreakdown.length) {
-                            final dayName = _dailyBreakdown[value.toInt()]['dayName'] as String? ?? '';
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                dayName.length >= 3 ? dayName.substring(0, 3) : dayName,
-                                style: GoogleFonts.poppins(fontSize: 10),
-                              ),
-                            );
-                          }
-                          return const Text('');
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  ),
-                  borderData: FlBorderData(show: false),
-                  barGroups: _dailyBreakdown.asMap().entries.map((entry) {
-                    final points = entry.value['points'] as int? ?? 0;
-                    return BarChartGroupData(
-                      x: entry.key,
-                      barRods: [
-                        BarChartRodData(
-                          toY: points.toDouble(),
-                          color: Colors.amber[700],
-                          width: 20,
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(4),
-                            topRight: Radius.circular(4),
-                          ),
-                        ),
-                      ],
-                    );
-                  }).toList(),
+            if (_currentUserId != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[200]!),
                 ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEarningsChart() {
-    if (_dailyBreakdown.isEmpty) return const SizedBox.shrink();
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Daily Earnings',
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF006D77),
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 200,
-              child: BarChart(
-                BarChartData(
-                  gridData: FlGridData(show: true, drawVerticalLine: false),
-                  titlesData: FlTitlesData(
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 40,
-                        getTitlesWidget: (value, meta) {
-                          return Text(
-                            'RM${value.toInt()}',
-                            style: GoogleFonts.poppins(fontSize: 9),
-                          );
-                        },
-                      ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          if (value.toInt() >= 0 && value.toInt() < _dailyBreakdown.length) {
-                            final dayName = _dailyBreakdown[value.toInt()]['dayName'] as String? ?? '';
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                dayName.length >= 3 ? dayName.substring(0, 3) : dayName,
-                                style: GoogleFonts.poppins(fontSize: 10),
-                              ),
-                            );
-                          }
-                          return const Text('');
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  ),
-                  borderData: FlBorderData(show: false),
-                  barGroups: _dailyBreakdown.asMap().entries.map((entry) {
-                    final earnings = entry.value['earnings'] as double? ?? 0.0;
-                    return BarChartGroupData(
-                      x: entry.key,
-                      barRods: [
-                        BarChartRodData(
-                          toY: earnings,
-                          color: Colors.green[600],
-                          width: 20,
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(4),
-                            topRight: Radius.circular(4),
-                          ),
-                        ),
-                      ],
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDailyBreakdown() {
-    if (_dailyBreakdown.isEmpty) return const SizedBox.shrink();
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Daily Breakdown',
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF006D77),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ..._dailyBreakdown.map((day) => _buildDayItem(day)).toList(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDayItem(Map<String, dynamic> day) {
-    final date = day['date'] as DateTime? ?? DateTime.now();
-    final isToday = date.day == DateTime.now().day &&
-        date.month == DateTime.now().month &&
-        date.year == DateTime.now().year;
-
-    final completedTasks = day['completedTasks'] as int? ?? 0;
-    final totalTasks = day['totalTasks'] as int? ?? 0;
-    final points = day['points'] as int? ?? 0;
-    final earnings = day['earnings'] as double? ?? 0.0;
-    final completionRate = day['completionRate'] as double? ?? 0.0;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isToday ? const Color(0xFF006D77).withOpacity(0.1) : Colors.grey[50],
-        borderRadius: BorderRadius.circular(12),
-        border: isToday ? Border.all(color: const Color(0xFF006D77), width: 1) : null,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  day['dayName'] as String? ?? 'Unknown',
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: isToday ? const Color(0xFF006D77) : Colors.black87,
-                  ),
-                ),
-                Text(
-                  '${date.day}/${date.month}',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Text(
-                  '$completedTasks tasks',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                if (earnings > 0) ...[
-                  Text(
-                    'RM${earnings.toStringAsFixed(2)}',
-                    style: GoogleFonts.poppins(
-                      fontSize: 11,
-                      color: Colors.green[600],
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                child: Column(
                   children: [
-                    Icon(Icons.stars, size: 14, color: Colors.amber[700]),
-                    const SizedBox(width: 4),
                     Text(
-                      points.toString(),
+                      'Checked Collections:',
                       style: GoogleFonts.poppins(
-                        fontSize: 14,
+                        fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Colors.amber[700],
+                        color: Colors.blue[700],
                       ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'pointsHistory • moneyHistory • profiledetails',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.blue[600],
+                      ),
+                      textAlign: TextAlign.center,
                     ),
                   ],
                 ),
-                Text(
-                  '${completionRate.toStringAsFixed(0)}%',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInsightsCard() {
-    if (_summaryData == null) return const SizedBox.shrink();
-
-    final completionRate = _summaryData!['completionRate'] as double? ?? 0.0;
-    final averageDailyCompletion = _summaryData!['averageDailyCompletion'] as double? ?? 0.0;
-    final averageDailyEarnings = _summaryData!['averageDailyEarnings'] as double? ?? 0.0;
-    final mostProductiveDay = _summaryData!['mostProductiveDay'] as String? ?? 'N/A';
-    final totalPoints = _summaryData!['totalPoints'] as int? ?? 0;
-    final totalEarnings = _summaryData!['totalEarnings'] as double? ?? 0.0;
-    final userName = _summaryData!['userName'] as String? ?? 'User';
-
-    String performanceEmoji = completionRate >= 90 ? '🏆' :
-    completionRate >= 70 ? '🌟' :
-    completionRate >= 50 ? '👍' : '💪';
-
-    String motivationalMessage = completionRate >= 90 ? '$userName, excellent work this week!' :
-    completionRate >= 70 ? '$userName, great progress this week!' :
-    completionRate >= 50 ? '$userName, good effort, keep it up!' :
-    '$userName, every step counts, keep going!';
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              const Color(0xFF006D77).withOpacity(0.1),
-              const Color(0xFF006D77).withOpacity(0.05),
+              ),
+              const SizedBox(height: 16),
             ],
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
             Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  performanceEmoji,
-                  style: const TextStyle(fontSize: 24),
+                ElevatedButton(
+                  onPressed: _selectWeek,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF006D77),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    'Select Different Week',
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
                 ),
                 const SizedBox(width: 12),
-                Text(
-                  'Weekly Insights',
-                  style: GoogleFonts.poppins(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF006D77),
+                if (_currentUserId != null)
+                  OutlinedButton(
+                    onPressed: _loadWeeklySummary,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF006D77)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'Retry',
+                      style: GoogleFonts.poppins(
+                          color: const Color(0xFF006D77)),
+                    ),
                   ),
-                ),
               ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              motivationalMessage,
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildInsightRow('Average daily completion', '${averageDailyCompletion.toStringAsFixed(1)}%'),
-            _buildInsightRow('Most productive day', mostProductiveDay),
-            _buildInsightRow('Total points earned', '$totalPoints points'),
-            _buildInsightRow('Total earnings', 'RM${totalEarnings.toStringAsFixed(2)}'),
-            _buildInsightRow('Average daily earnings', 'RM${averageDailyEarnings.toStringAsFixed(2)}'),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildInsightRow(String label, String value, {bool isWarning = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              color: Colors.grey[700],
-            ),
-          ),
-          Text(
-            value,
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: isWarning ? Colors.red : const Color(0xFF006D77),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCategoryBreakdown() {
-    if (_summaryData == null) return const SizedBox.shrink();
-
-    final tasksByCategory = _summaryData!['tasksByCategory'] as Map<String, int>? ?? <String, int>{};
-
-    if (tasksByCategory.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Task Categories This Week',
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF006D77),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ...tasksByCategory.entries.map((entry) => _buildCategoryItem(entry.key, entry.value)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCategoryItem(String category, int count) {
-    final colors = {
-      'Translation': Colors.blue,
-      'Development': Colors.green,
-      'Design': Colors.purple,
-      'Research': Colors.orange,
-      'Writing': Colors.teal,
-      'General': Colors.grey,
-    };
-
-    final color = colors[category] ?? Colors.grey;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            category,
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              count.toString(),
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -937,6 +829,12 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                 onPressed: _loadWeeklySummary,
                 tooltip: 'Refresh Data',
               ),
+            // Debug button for development
+            IconButton(
+              icon: const Icon(Icons.bug_report),
+              onPressed: _debugDataFetching,
+              tooltip: 'Debug Data',
+            ),
           ],
         ),
         body: _isLoading
@@ -950,161 +848,114 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // User Info Card
-              if (_currentUserId != null)
-                Card(
-                  elevation: 1,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Icon(Icons.person, color: Colors.grey[600], size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'User: ${_currentUserId!.substring(0, 8)}...',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          'Data Source: pointsHistory + moneyHistory + profiledetails',
-                          style: GoogleFonts.poppins(
-                            fontSize: 10,
-                            color: Colors.grey[500],
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+              // Week Navigation
+              _buildWeekNavigationCard(),
 
               const SizedBox(height: 16),
 
-              // User Profile Header
-              _buildUserProfileHeader(),
+              // Show error state if there's an error
+              if (_errorMessage != null) ...[
+                _buildErrorState(),
+              ] else
+                if (_summaryData != null) ...[
+                  // User Profile Header
+                  _buildUserProfileHeader(),
 
-              const SizedBox(height: 20),
+                  const SizedBox(height: 20),
 
-              // Statistics Grid
-              if (_summaryData != null) ...[
-                GridView.count(
-                  crossAxisCount: 2,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  childAspectRatio: 1.3,
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  children: [
-                    _buildStatCard(
-                      title: 'Total Tasks',
-                      value: (_summaryData!['totalTasks'] as int? ?? 0).toString(),
-                      icon: Icons.assignment,
-                      color: const Color(0xFF006D77),
-                    ),
-                    _buildStatCard(
-                      title: 'Completed',
-                      value: (_summaryData!['completedTasks'] as int? ?? 0).toString(),
-                      icon: Icons.check_circle,
-                      color: Colors.green,
-                      progress: (_summaryData!['completionRate'] as double? ?? 0.0),
-                    ),
-                    _buildStatCard(
-                      title: 'Total Points',
-                      value: (_summaryData!['totalPoints'] as int? ?? 0).toString(),
-                      icon: Icons.stars,
-                      color: Colors.amber[700]!,
-                    ),
-                    _buildStatCard(
-                      title: 'Total Earnings',
-                      value: 'RM${(_summaryData!['totalEarnings'] as double? ?? 0.0).toStringAsFixed(0)}',
-                      icon: Icons.attach_money,
-                      color: Colors.green[600]!,
-                    ),
-                  ],
-                ),
+                  // Statistics Grid
+                  GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    childAspectRatio: 1.3,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    children: [
+                      _buildStatCard(
+                        title: 'Total Tasks',
+                        value: (_summaryData!['totalTasks'] as int? ?? 0)
+                            .toString(),
+                        icon: Icons.assignment,
+                        color: const Color(0xFF006D77),
+                      ),
+                      _buildStatCard(
+                        title: 'Completed',
+                        value: (_summaryData!['completedTasks'] as int? ?? 0)
+                            .toString(),
+                        icon: Icons.check_circle,
+                        color: Colors.green,
+                        progress: (_summaryData!['completionRate'] as double? ??
+                            0.0),
+                      ),
+                      _buildStatCard(
+                        title: 'Total Points',
+                        value: (_summaryData!['totalPoints'] as int? ?? 0)
+                            .toString(),
+                        icon: Icons.stars,
+                        color: Colors.amber[700]!,
+                      ),
+                      _buildStatCard(
+                        title: 'Total Earnings',
+                        value: 'RM${(_summaryData!['totalEarnings'] as double? ??
+                            0.0).toStringAsFixed(0)}',
+                        icon: Icons.attach_money,
+                        color: Colors.green[600]!,
+                      ),
+                    ],
+                  ),
 
-                const SizedBox(height: 20),
+                  const SizedBox(height: 20),
 
-                // Insights Card
-                _buildInsightsCard(),
-
-                const SizedBox(height: 20),
-
-                // Daily Progress Chart
-                _buildDailyChart(),
-
-                const SizedBox(height: 20),
-
-                // Points Chart
-                _buildPointsChart(),
-
-                const SizedBox(height: 20),
-
-                // Earnings Chart
-                _buildEarningsChart(),
-
-                const SizedBox(height: 20),
-
-                // Task Categories
-                _buildCategoryBreakdown(),
-
-                const SizedBox(height: 20),
-
-                // Daily Breakdown
-                _buildDailyBreakdown(),
-              ] else ...[
-                Card(
-                  elevation: 2,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Column(
-                      children: [
-                        Icon(Icons.info_outline, size: 64, color: Colors.grey[400]),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No data available for this week',
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            color: Colors.grey[600],
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _currentUserId != null
-                              ? 'User: ${_currentUserId!.substring(0, 8)}...\nChecking: pointsHistory, moneyHistory, and profiledetails'
-                              : 'No user logged in',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey[500],
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: _selectWeek,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF006D77),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                  // Debug Info Card (for development)
+                  Card(
+                    elevation: 1,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Debug Information',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.blue[600],
                             ),
                           ),
-                          child: Text(
-                            'Select Different Week',
-                            style: GoogleFonts.poppins(color: Colors.white),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Current User: $_currentUserId',
+                            style: GoogleFonts.poppins(
+                                fontSize: 12, color: Colors.grey[600]),
                           ),
-                        ),
-                      ],
+                          Text(
+                            'Week: ${_formatWeekRange(_selectedWeekStart)}',
+                            style: GoogleFonts.poppins(
+                                fontSize: 12, color: Colors.grey[600]),
+                          ),
+                          Text(
+                            'Data Quality: ${_summaryData?['dataQuality']?['pointsRecords'] ??
+                                0} points, ${_summaryData?['dataQuality']?['moneyRecords'] ??
+                                0} money, ${_summaryData?['dataQuality']?['uniqueTasks'] ??
+                                0} unique tasks',
+                            style: GoogleFonts.poppins(
+                                fontSize: 12, color: Colors.grey[600]),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
 
+                  const SizedBox(height: 20),
+
+                ] else
+                  ...[
+                    // Empty state
+                    _buildEmptyState(),
+                  ],
               const SizedBox(height: 20),
             ],
           ),

@@ -1,6 +1,7 @@
-// UserDataService.dart - Fixed to fetch from both pointsHistory and moneyHistory
+// Fixed UserDataService.dart - Corrected task counting logic
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
 
 class UserDataService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -44,6 +45,16 @@ class UserDataService {
     try {
       print('Fetching points history for user: $userId from $startDate to $endDate');
 
+      if (userId.isEmpty) {
+        print('Error: Empty userId provided');
+        return [];
+      }
+
+      if (endDate.isBefore(startDate)) {
+        print('Error: End date is before start date');
+        return [];
+      }
+
       final snapshot = await _firestore
           .collection('users')
           .doc(userId)
@@ -59,32 +70,54 @@ class UserDataService {
         try {
           final data = doc.data();
 
-          // Safely extract and validate data
+          if (data.isEmpty) {
+            print('Warning: Empty document found: ${doc.id}');
+            continue;
+          }
+
           final processedData = {
             'id': doc.id,
             'points': _safeToInt(data['points']),
-            'description': _safeToString(data['description'] ?? 'Points earned'),
-            'taskTitle': _safeToString(data['taskTitle'] ?? data['description'] ?? 'Task Completed'),
+            'description': _safeToString(data['description']).isNotEmpty
+                ? _safeToString(data['description'])
+                : 'Points earned',
+            'taskTitle': _safeToString(data['taskTitle']).isNotEmpty
+                ? _safeToString(data['taskTitle'])
+                : (_safeToString(data['description']).isNotEmpty
+                ? _safeToString(data['description'])
+                : 'Task Completed'),
             'taskId': _safeToString(data['taskId']),
-            'source': _safeToString(data['source'] ?? 'task_completion'),
-            'type': _safeToString(data['type'] ?? 'earning'),
-            'category': _safeToString(data['category'] ?? 'General'),
+            'source': _safeToString(data['source']).isNotEmpty
+                ? _safeToString(data['source'])
+                : 'task_completion',
+            'type': _safeToString(data['type']).isNotEmpty
+                ? _safeToString(data['type'])
+                : 'earning',
+            'category': _safeToString(data['category']).isNotEmpty
+                ? _safeToString(data['category'])
+                : 'General',
             'timestamp': data['timestamp'] as Timestamp?,
           };
 
-          // Only add if we have valid timestamp
           if (processedData['timestamp'] != null) {
-            pointsData.add(processedData);
-            print('Added points record: ${processedData['taskTitle']} - ${processedData['points']} points');
+            final timestamp = (processedData['timestamp'] as Timestamp).toDate();
+            if (timestamp.isAfter(startDate.subtract(const Duration(seconds: 1))) &&
+                timestamp.isBefore(endDate)) {
+              pointsData.add(processedData);
+              print('Added points record: ${processedData['taskTitle']} - ${processedData['points']} points at $timestamp');
+            } else {
+              print('Skipped points record outside date range: ${processedData['taskTitle']} at $timestamp');
+            }
+          } else {
+            print('Warning: Skipped points record with null timestamp: ${doc.id}');
           }
 
         } catch (e) {
           print('Error processing points history document ${doc.id}: $e');
-          // Continue processing other documents
         }
       }
 
-      print('Fetched ${pointsData.length} points history records for user $userId');
+      print('Successfully fetched ${pointsData.length} points history records for user $userId');
       return pointsData;
 
     } catch (e) {
@@ -93,7 +126,7 @@ class UserDataService {
     }
   }
 
-  // NEW: Fetch user-specific money history for a date range
+  // Fetch user-specific money history for a date range
   static Future<List<Map<String, dynamic>>> fetchUserMoneyHistory({
     required String userId,
     required DateTime startDate,
@@ -101,6 +134,16 @@ class UserDataService {
   }) async {
     try {
       print('Fetching money history for user: $userId from $startDate to $endDate');
+
+      if (userId.isEmpty) {
+        print('Error: Empty userId provided');
+        return [];
+      }
+
+      if (endDate.isBefore(startDate)) {
+        print('Error: End date is before start date');
+        return [];
+      }
 
       final snapshot = await _firestore
           .collection('users')
@@ -117,31 +160,51 @@ class UserDataService {
         try {
           final data = doc.data();
 
-          // Safely extract and validate data
+          if (data.isEmpty) {
+            print('Warning: Empty document found: ${doc.id}');
+            continue;
+          }
+
           final processedData = {
             'id': doc.id,
             'amount': _safeToDouble(data['amount']),
-            'description': _safeToString(data['description'] ?? 'Money transaction'),
-            'taskTitle': _safeToString(data['taskTitle'] ?? data['description'] ?? 'Transaction'),
+            'description': _safeToString(data['description']).isNotEmpty
+                ? _safeToString(data['description'])
+                : 'Money transaction',
+            'taskTitle': _safeToString(data['taskTitle']).isNotEmpty
+                ? _safeToString(data['taskTitle'])
+                : (_safeToString(data['description']).isNotEmpty
+                ? _safeToString(data['description'])
+                : 'Transaction'),
             'taskId': _safeToString(data['taskId']),
-            'source': _safeToString(data['source'] ?? 'task_completion'),
-            'type': _safeToString(data['type'] ?? 'earning'),
+            'source': _safeToString(data['source']).isNotEmpty
+                ? _safeToString(data['source'])
+                : 'task_completion',
+            'type': _safeToString(data['type']).isNotEmpty
+                ? _safeToString(data['type'])
+                : 'earning',
             'timestamp': data['timestamp'] as Timestamp?,
           };
 
-          // Only add if we have valid timestamp
           if (processedData['timestamp'] != null) {
-            moneyData.add(processedData);
-            print('Added money record: ${processedData['taskTitle']} - RM${processedData['amount']}');
+            final timestamp = (processedData['timestamp'] as Timestamp).toDate();
+            if (timestamp.isAfter(startDate.subtract(const Duration(seconds: 1))) &&
+                timestamp.isBefore(endDate)) {
+              moneyData.add(processedData);
+              print('Added money record: ${processedData['taskTitle']} - RM${processedData['amount']} at $timestamp');
+            } else {
+              print('Skipped money record outside date range: ${processedData['taskTitle']} at $timestamp');
+            }
+          } else {
+            print('Warning: Skipped money record with null timestamp: ${doc.id}');
           }
 
         } catch (e) {
           print('Error processing money history document ${doc.id}: $e');
-          // Continue processing other documents
         }
       }
 
-      print('Fetched ${moneyData.length} money history records for user $userId');
+      print('Successfully fetched ${moneyData.length} money history records for user $userId');
       return moneyData;
 
     } catch (e) {
@@ -150,7 +213,118 @@ class UserDataService {
     }
   }
 
-  // Fetch user profile details (removed level references)
+  static Future<Map<String, dynamic>> getUserDataSummary(String userId) async {
+    try {
+      print('Getting data summary for user: $userId');
+
+      final pointsCount = await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('pointsHistory')
+          .count()
+          .get();
+
+      final moneyCount = await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('moneyHistory')
+          .count()
+          .get();
+
+      final profileExists = await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('profiledetails')
+          .doc('profile')
+          .get();
+
+      DateTime? earliestPointsDate;
+      DateTime? latestPointsDate;
+      DateTime? earliestMoneyDate;
+      DateTime? latestMoneyDate;
+
+      if (pointsCount.count! > 0) {
+        final earliestPoints = await _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('pointsHistory')
+            .orderBy('timestamp', descending: false)
+            .limit(1)
+            .get();
+
+        final latestPoints = await _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('pointsHistory')
+            .orderBy('timestamp', descending: true)
+            .limit(1)
+            .get();
+
+        if (earliestPoints.docs.isNotEmpty) {
+          earliestPointsDate = (earliestPoints.docs.first.data()['timestamp'] as Timestamp?)?.toDate();
+        }
+        if (latestPoints.docs.isNotEmpty) {
+          latestPointsDate = (latestPoints.docs.first.data()['timestamp'] as Timestamp?)?.toDate();
+        }
+      }
+
+      if (moneyCount.count! > 0) {
+        final earliestMoney = await _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('moneyHistory')
+            .orderBy('timestamp', descending: false)
+            .limit(1)
+            .get();
+
+        final latestMoney = await _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('moneyHistory')
+            .orderBy('timestamp', descending: true)
+            .limit(1)
+            .get();
+
+        if (earliestMoney.docs.isNotEmpty) {
+          earliestMoneyDate = (earliestMoney.docs.first.data()['timestamp'] as Timestamp?)?.toDate();
+        }
+        if (latestMoney.docs.isNotEmpty) {
+          latestMoneyDate = (latestMoney.docs.first.data()['timestamp'] as Timestamp?)?.toDate();
+        }
+      }
+
+      return {
+        'userId': userId,
+        'pointsHistoryCount': pointsCount.count ?? 0,
+        'moneyHistoryCount': moneyCount.count ?? 0,
+        'hasProfile': profileExists.exists,
+        'earliestPointsDate': earliestPointsDate,
+        'latestPointsDate': latestPointsDate,
+        'earliestMoneyDate': earliestMoneyDate,
+        'latestMoneyDate': latestMoneyDate,
+        'totalRecords': (pointsCount.count ?? 0) + (moneyCount.count ?? 0),
+        'dataAvailable': (pointsCount.count ?? 0) > 0 || (moneyCount.count ?? 0) > 0 || profileExists.exists,
+      };
+
+    } catch (e) {
+      print('Error getting user data summary: $e');
+      return {
+        'userId': userId,
+        'pointsHistoryCount': 0,
+        'moneyHistoryCount': 0,
+        'hasProfile': false,
+        'earliestPointsDate': null,
+        'latestPointsDate': null,
+        'earliestMoneyDate': null,
+        'latestMoneyDate': null,
+        'totalRecords': 0,
+        'dataAvailable': false,
+        'error': e.toString(),
+      };
+    }
+  }
+
+  // Fetch user profile details
   static Future<Map<String, dynamic>?> fetchUserProfileDetails({
     required String userId,
   }) async {
@@ -167,7 +341,6 @@ class UserDataService {
       if (snapshot.exists) {
         final data = snapshot.data()!;
 
-        // Safely extract profile data (removed level references)
         final profileData = {
           'id': snapshot.id,
           'name': _safeToString(data['name'] ?? data['displayName'] ?? 'User'),
@@ -196,7 +369,7 @@ class UserDataService {
     }
   }
 
-  // Generate daily summary data for a specific user using correct data sources
+  // FIXED: Generate daily summary with correct task counting
   static Future<Map<String, dynamic>> generateDailySummaryForUser({
     required String userId,
     required DateTime date,
@@ -204,98 +377,174 @@ class UserDataService {
     try {
       print('Generating daily summary for user: $userId on $date');
 
+      if (userId.isEmpty) {
+        throw ArgumentError('User ID cannot be empty');
+      }
+
       final dayStart = DateTime(date.year, date.month, date.day);
       final dayEnd = dayStart.add(const Duration(days: 1));
 
-      // Fetch user data in parallel from BOTH collections
+      print('Date range: $dayStart to $dayEnd');
+
+      final hasData = await userHasData(userId);
+      if (!hasData) {
+        print('User $userId has no data available');
+        return _getEmptyDailySummary(userId, date, 'No user data found');
+      }
+
       final results = await Future.wait([
         fetchUserPointsHistory(userId: userId, startDate: dayStart, endDate: dayEnd),
         fetchUserMoneyHistory(userId: userId, startDate: dayStart, endDate: dayEnd),
         fetchUserProfileDetails(userId: userId),
-      ]);
+      ]).timeout(const Duration(seconds: 30), onTimeout: () {
+        print('Timeout while fetching user data for $userId');
+        throw TimeoutException('Data fetch timeout', const Duration(seconds: 30));
+      });
 
       final pointsData = results[0] as List<Map<String, dynamic>>;
       final moneyData = results[1] as List<Map<String, dynamic>>;
       final profileData = results[2] as Map<String, dynamic>?;
 
-      // Process points data
+      print('Fetched data: ${pointsData.length} points records, ${moneyData.length} money records');
+
+      // FIXED: Create a unified task tracking system
+      // Use taskId to avoid double counting the same task
+      Set<String> uniqueTaskIds = {};
+      Map<String, Map<String, dynamic>> tasksByTaskId = {};
+
+      // Process points data and track unique tasks
       int pointsEarned = 0;
       Map<String, int> tasksByCategory = {};
-      List<Map<String, dynamic>> taskDetails = [];
       List<Map<String, dynamic>> pointTransactions = [];
 
       for (var pointRecord in pointsData) {
-        final points = pointRecord['points'] as int;
-        final taskTitle = pointRecord['taskTitle'] as String;
-        final category = pointRecord['category'] as String;
-        final timestamp = pointRecord['timestamp'] as Timestamp?;
-        final description = pointRecord['description'] as String;
+        try {
+          final points = pointRecord['points'] as int;
+          final taskTitle = pointRecord['taskTitle'] as String;
+          final taskId = pointRecord['taskId'] as String;
+          final category = pointRecord['category'] as String;
+          final timestamp = pointRecord['timestamp'] as Timestamp?;
+          final description = pointRecord['description'] as String;
 
-        pointsEarned += points;
+          pointsEarned += points;
 
-        // Count as completed task if it has points
-        if (points > 0) {
-          // Categorize task
-          final taskCategory = category.isNotEmpty ? category : _categorizeTask(taskTitle);
-          tasksByCategory[taskCategory] = (tasksByCategory[taskCategory] ?? 0) + 1;
+          // Track unique tasks by taskId (or taskTitle if no taskId)
+          final uniqueId = taskId.isNotEmpty ? taskId : taskTitle;
+          if (uniqueId.isNotEmpty) {
+            uniqueTaskIds.add(uniqueId);
 
-          // Add to task details
-          taskDetails.add({
+            // Store task info for later use
+            tasksByTaskId[uniqueId] = {
+              'taskId': taskId,
+              'taskTitle': taskTitle,
+              'points': points,
+              'category': category.isNotEmpty ? category : _categorizeTask(taskTitle),
+              'timestamp': timestamp?.toDate() ?? DateTime.now(),
+              'status': points > 0 ? 'Completed' : 'Deducted',
+              'progress': points > 0 ? 100.0 : 0.0,
+              'source': pointRecord['source'],
+              'type': pointRecord['type'],
+            };
+          }
+
+          // Add to point transactions
+          pointTransactions.add({
             'id': pointRecord['id'],
-            'title': taskTitle,
-            'status': 'Completed',
-            'progress': 100.0,
             'points': points,
-            'time': timestamp?.toDate() ?? DateTime.now(),
-            'category': taskCategory,
+            'description': description,
+            'taskTitle': taskTitle,
+            'timestamp': timestamp?.toDate() ?? DateTime.now(),
             'source': pointRecord['source'],
-            'type': pointRecord['type'],
           });
+        } catch (e) {
+          print('Error processing point record: $e');
         }
-
-        // Add to point transactions
-        pointTransactions.add({
-          'id': pointRecord['id'],
-          'points': points,
-          'description': description,
-          'taskTitle': taskTitle,
-          'timestamp': timestamp?.toDate() ?? DateTime.now(),
-          'source': pointRecord['source'],
-        });
       }
 
-      // Process money data (FIXED: Use actual money data)
+      // Process money data and enhance task info
       double totalEarnings = 0.0;
-      int completedTasksCount = 0;
       List<Map<String, dynamic>> moneyTransactions = [];
 
       for (var moneyRecord in moneyData) {
-        final amount = moneyRecord['amount'] as double;
-        final taskTitle = moneyRecord['taskTitle'] as String;
-        final timestamp = moneyRecord['timestamp'] as Timestamp?;
-        final description = moneyRecord['description'] as String;
+        try {
+          final amount = moneyRecord['amount'] as double;
+          final taskTitle = moneyRecord['taskTitle'] as String;
+          final taskId = moneyRecord['taskId'] as String;
+          final timestamp = moneyRecord['timestamp'] as Timestamp?;
+          final description = moneyRecord['description'] as String;
 
-        totalEarnings += amount;
+          totalEarnings += amount;
 
-        if (amount > 0) {
-          completedTasksCount++;
+          // Add earnings info to existing task if it exists
+          final uniqueId = taskId.isNotEmpty ? taskId : taskTitle;
+          if (uniqueId.isNotEmpty && tasksByTaskId.containsKey(uniqueId)) {
+            tasksByTaskId[uniqueId]!['earnings'] = amount;
+          } else if (uniqueId.isNotEmpty) {
+            // This is a money-only transaction (no corresponding points)
+            uniqueTaskIds.add(uniqueId);
+            tasksByTaskId[uniqueId] = {
+              'taskId': taskId,
+              'taskTitle': taskTitle,
+              'points': 0,
+              'earnings': amount,
+              'category': _categorizeTask(taskTitle),
+              'timestamp': timestamp?.toDate() ?? DateTime.now(),
+              'status': amount > 0 ? 'Completed' : 'Deducted',
+              'progress': amount > 0 ? 100.0 : 0.0,
+              'source': moneyRecord['source'],
+              'type': moneyRecord['type'],
+            };
+          }
+
+          moneyTransactions.add({
+            'id': moneyRecord['id'],
+            'amount': amount,
+            'description': description,
+            'taskTitle': taskTitle,
+            'timestamp': timestamp?.toDate() ?? DateTime.now(),
+            'source': moneyRecord['source'],
+          });
+        } catch (e) {
+          print('Error processing money record: $e');
         }
+      }
 
-        // Add to money transactions
-        moneyTransactions.add({
-          'id': moneyRecord['id'],
-          'amount': amount,
-          'description': description,
-          'taskTitle': taskTitle,
-          'timestamp': timestamp?.toDate() ?? DateTime.now(),
-          'source': moneyRecord['source'],
+      // FIXED: Create task details and categories from unique tasks
+      List<Map<String, dynamic>> taskDetails = [];
+
+      for (var entry in tasksByTaskId.entries) {
+        final taskInfo = entry.value;
+        final category = taskInfo['category'] as String;
+
+        // Count task by category
+        tasksByCategory[category] = (tasksByCategory[category] ?? 0) + 1;
+
+        // Add to task details
+        taskDetails.add({
+          'id': entry.key,
+          'title': taskInfo['taskTitle'],
+          'status': taskInfo['status'],
+          'progress': taskInfo['progress'],
+          'points': taskInfo['points'],
+          'earnings': taskInfo['earnings'] ?? 0.0,
+          'time': taskInfo['timestamp'],
+          'category': category,
+          'source': taskInfo['source'],
+          'type': taskInfo['type'],
         });
       }
 
-      // Get user info from profile (removed level references)
+      // FIXED: Calculate correct counts
+      final totalTasks = uniqueTaskIds.length; // This is the correct count!
+      final completedTasks = taskDetails.where((task) => task['status'] == 'Completed').length;
+
+      // Get user info from profile
       final userName = profileData?['name'] ?? 'User';
       final userTotalPoints = profileData?['totalPoints'] ?? 0;
       final userTotalEarnings = profileData?['totalEarnings'] ?? 0.0;
+
+      // Calculate completion rate
+      double completionRate = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0.0;
 
       final summaryData = {
         'date': date.toIso8601String(),
@@ -303,54 +552,82 @@ class UserDataService {
         'userName': userName,
         'userTotalPoints': userTotalPoints,
         'userTotalEarnings': userTotalEarnings,
-        'totalTasks': completedTasksCount,
-        'completedTasks': completedTasksCount,
+        'totalTasks': totalTasks, // FIXED: Now shows correct count
+        'completedTasks': completedTasks,
         'inProgressTasks': 0,
         'pendingTasks': 0,
         'pointsEarned': pointsEarned,
-        'totalEarnings': totalEarnings, // FIXED: Now using actual money data
+        'totalEarnings': totalEarnings,
         'translationsCount': 0,
         'totalCharacters': 0,
         'taskDetails': taskDetails,
         'pointTransactions': pointTransactions,
-        'moneyTransactions': moneyTransactions, // NEW: Added money transactions
+        'moneyTransactions': moneyTransactions,
         'translationDetails': <Map<String, dynamic>>[],
         'tasksByCategory': tasksByCategory,
-        'completionRate': completedTasksCount > 0 ? 100.0 : 0.0,
+        'completionRate': completionRate,
         'profileData': profileData,
+        'dataFetched': DateTime.now().toIso8601String(),
+        'dataQuality': {
+          'pointsRecords': pointsData.length,
+          'moneyRecords': moneyData.length,
+          'uniqueTasks': totalTasks, // ADDED: Show unique task count
+          'hasProfile': profileData != null,
+          'dateRange': '${dayStart.toIso8601String()} - ${dayEnd.toIso8601String()}',
+        },
       };
 
-      print('Generated daily summary for user $userId ($userName): ${completedTasksCount} tasks, ${pointsEarned} points, RM${totalEarnings.toStringAsFixed(2)}');
+      print('Generated daily summary for user $userId ($userName):');
+      print('  - Unique Tasks: $totalTasks (FIXED)'); // Updated log
+      print('  - Points Records: ${pointsData.length}');
+      print('  - Money Records: ${moneyData.length}');
+      print('  - Points: $pointsEarned');
+      print('  - Earnings: RM${totalEarnings.toStringAsFixed(2)}');
+      print('  - Completion: ${completionRate.toStringAsFixed(1)}%');
+
       return summaryData;
 
     } catch (e) {
       print('Error generating daily summary for user $userId: $e');
-      return {
-        'date': date.toIso8601String(),
-        'userId': userId,
-        'userName': 'User',
-        'userTotalPoints': 0,
-        'userTotalEarnings': 0.0,
-        'totalTasks': 0,
-        'completedTasks': 0,
-        'inProgressTasks': 0,
-        'pendingTasks': 0,
-        'pointsEarned': 0,
-        'totalEarnings': 0.0,
-        'translationsCount': 0,
-        'totalCharacters': 0,
-        'taskDetails': <Map<String, dynamic>>[],
-        'pointTransactions': <Map<String, dynamic>>[],
-        'moneyTransactions': <Map<String, dynamic>>[],
-        'translationDetails': <Map<String, dynamic>>[],
-        'tasksByCategory': <String, int>{},
-        'completionRate': 0.0,
-        'profileData': null,
-      };
+      return _getEmptyDailySummary(userId, date, e.toString());
     }
   }
 
-  // Generate weekly summary data for a specific user using correct data sources
+  static Map<String, dynamic> _getEmptyDailySummary(String userId, DateTime date, String reason) {
+    return {
+      'date': date.toIso8601String(),
+      'userId': userId,
+      'userName': 'User',
+      'userTotalPoints': 0,
+      'userTotalEarnings': 0.0,
+      'totalTasks': 0,
+      'completedTasks': 0,
+      'inProgressTasks': 0,
+      'pendingTasks': 0,
+      'pointsEarned': 0,
+      'totalEarnings': 0.0,
+      'translationsCount': 0,
+      'totalCharacters': 0,
+      'taskDetails': <Map<String, dynamic>>[],
+      'pointTransactions': <Map<String, dynamic>>[],
+      'moneyTransactions': <Map<String, dynamic>>[],
+      'translationDetails': <Map<String, dynamic>>[],
+      'tasksByCategory': <String, int>{},
+      'completionRate': 0.0,
+      'profileData': null,
+      'dataFetched': DateTime.now().toIso8601String(),
+      'error': reason,
+      'dataQuality': {
+        'pointsRecords': 0,
+        'moneyRecords': 0,
+        'uniqueTasks': 0,
+        'hasProfile': false,
+        'dateRange': '${date.toIso8601String()} - ${date.add(const Duration(days: 1)).toIso8601String()}',
+      },
+    };
+  }
+
+  // FIXED: Generate weekly summary with correct task counting
   static Future<Map<String, dynamic>> generateWeeklySummaryForUser({
     required String userId,
     required DateTime weekStart,
@@ -360,7 +637,6 @@ class UserDataService {
 
       final weekEnd = weekStart.add(const Duration(days: 7));
 
-      // Fetch user data for the week in parallel from BOTH collections
       final results = await Future.wait([
         fetchUserPointsHistory(userId: userId, startDate: weekStart, endDate: weekEnd),
         fetchUserMoneyHistory(userId: userId, startDate: weekStart, endDate: weekEnd),
@@ -371,9 +647,10 @@ class UserDataService {
       final moneyData = results[1] as List<Map<String, dynamic>>;
       final profileData = results[2] as Map<String, dynamic>?;
 
-      // Process weekly totals
-      int totalTasks = 0;
-      int completedTasks = 0;
+      // FIXED: Use same unified task tracking for weekly summary
+      Set<String> uniqueTaskIds = {};
+      Map<String, Map<String, dynamic>> tasksByTaskId = {};
+
       int totalPoints = 0;
       double totalEarnings = 0.0;
       Map<String, int> tasksByCategory = {};
@@ -382,26 +659,62 @@ class UserDataService {
       for (var pointRecord in pointsData) {
         final points = pointRecord['points'] as int;
         final taskTitle = pointRecord['taskTitle'] as String;
+        final taskId = pointRecord['taskId'] as String;
         final category = pointRecord['category'] as String;
+        final timestamp = pointRecord['timestamp'] as Timestamp?;
 
         totalPoints += points;
 
-        if (points > 0) {
-          final taskCategory = category.isNotEmpty ? category : _categorizeTask(taskTitle);
-          tasksByCategory[taskCategory] = (tasksByCategory[taskCategory] ?? 0) + 1;
+        final uniqueId = taskId.isNotEmpty ? taskId : taskTitle;
+        if (uniqueId.isNotEmpty && points > 0) {
+          uniqueTaskIds.add(uniqueId);
+
+          tasksByTaskId[uniqueId] = {
+            'taskId': taskId,
+            'taskTitle': taskTitle,
+            'points': points,
+            'category': category.isNotEmpty ? category : _categorizeTask(taskTitle),
+            'timestamp': timestamp?.toDate() ?? DateTime.now(),
+          };
         }
       }
 
-      // Process money data (FIXED: Use actual money data)
+      // Process money data
       for (var moneyRecord in moneyData) {
         final amount = moneyRecord['amount'] as double;
+        final taskTitle = moneyRecord['taskTitle'] as String;
+        final taskId = moneyRecord['taskId'] as String;
+        final timestamp = moneyRecord['timestamp'] as Timestamp?;
+
         totalEarnings += amount;
 
-        if (amount > 0) {
-          totalTasks++;
-          completedTasks++;
+        final uniqueId = taskId.isNotEmpty ? taskId : taskTitle;
+        if (uniqueId.isNotEmpty && amount > 0) {
+          if (tasksByTaskId.containsKey(uniqueId)) {
+            tasksByTaskId[uniqueId]!['earnings'] = amount;
+          } else {
+            uniqueTaskIds.add(uniqueId);
+            tasksByTaskId[uniqueId] = {
+              'taskId': taskId,
+              'taskTitle': taskTitle,
+              'points': 0,
+              'earnings': amount,
+              'category': _categorizeTask(taskTitle),
+              'timestamp': timestamp?.toDate() ?? DateTime.now(),
+            };
+          }
         }
       }
+
+      // Count tasks by category
+      for (var taskInfo in tasksByTaskId.values) {
+        final category = taskInfo['category'] as String;
+        tasksByCategory[category] = (tasksByCategory[category] ?? 0) + 1;
+      }
+
+      // FIXED: Use correct task counts
+      final totalTasks = uniqueTaskIds.length;
+      final completedTasks = totalTasks; // Since we only count tasks with positive values
 
       double completionRate = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
 
@@ -412,52 +725,26 @@ class UserDataService {
         final dayStart = DateTime(currentDay.year, currentDay.month, currentDay.day);
         final dayEnd = dayStart.add(const Duration(days: 1));
 
-        // Get points for this day
-        final dayPointsRecords = pointsData.where((record) {
-          final timestamp = record['timestamp'] as Timestamp?;
-          if (timestamp == null) return false;
-          final date = timestamp.toDate();
-          return date.isAfter(dayStart.subtract(const Duration(seconds: 1))) &&
-              date.isBefore(dayEnd);
-        }).toList();
+        // Get daily data using the fixed method
+        final dailySummary = await generateDailySummaryForUser(
+          userId: userId,
+          date: currentDay,
+        );
 
-        // Get money for this day
-        final dayMoneyRecords = moneyData.where((record) {
-          final timestamp = record['timestamp'] as Timestamp?;
-          if (timestamp == null) return false;
-          final date = timestamp.toDate();
-          return date.isAfter(dayStart.subtract(const Duration(seconds: 1))) &&
-              date.isBefore(dayEnd);
-        }).toList();
-
-        int dayTasks = 0;
-        int dayPoints = 0;
-        double dayEarnings = 0.0;
-
-        // Count points
-        for (var record in dayPointsRecords) {
-          final points = record['points'] as int;
-          dayPoints += points;
-        }
-
-        // Count money and tasks
-        for (var record in dayMoneyRecords) {
-          final amount = record['amount'] as double;
-          if (amount > 0) {
-            dayTasks++;
-          }
-          dayEarnings += amount;
-        }
+        final dayTasks = dailySummary['totalTasks'] as int? ?? 0;
+        final dayPoints = dailySummary['pointsEarned'] as int? ?? 0;
+        final dayEarnings = dailySummary['totalEarnings'] as double? ?? 0.0;
+        final dayCompletionRate = dailySummary['completionRate'] as double? ?? 0.0;
 
         dailyBreakdown.add({
           'date': currentDay,
           'dayName': _getDayName(currentDay.weekday),
           'totalTasks': dayTasks,
-          'completedTasks': dayTasks,
+          'completedTasks': dayTasks, // All fetched tasks are considered completed
           'points': dayPoints,
           'earnings': dayEarnings,
           'translations': 0,
-          'completionRate': dayTasks > 0 ? 100.0 : 0.0,
+          'completionRate': dayCompletionRate,
         });
       }
 
@@ -476,7 +763,6 @@ class UserDataService {
         mostProductiveDayIndex = dailyBreakdown.indexWhere((day) => day['completionRate'] == maxRate);
       }
 
-      // Get user info from profile (removed level references)
       final userName = profileData?['name'] ?? 'User';
 
       final summaryData = {
@@ -484,13 +770,13 @@ class UserDataService {
         'weekEnd': weekEnd.toIso8601String(),
         'userId': userId,
         'userName': userName,
-        'totalTasks': totalTasks,
+        'totalTasks': totalTasks, // FIXED: Now using correct unique task count
         'completedTasks': completedTasks,
         'inProgressTasks': 0,
         'pendingTasks': 0,
         'overdueTasks': 0,
         'totalPoints': totalPoints,
-        'totalEarnings': totalEarnings, // FIXED: Now using actual money data
+        'totalEarnings': totalEarnings,
         'translationsCount': 0,
         'completionRate': completionRate,
         'tasksByCategory': tasksByCategory,
@@ -501,7 +787,7 @@ class UserDataService {
         'profileData': profileData,
       };
 
-      print('Generated weekly summary for user $userId ($userName): ${totalTasks} tasks, ${totalPoints} points, RM${totalEarnings.toStringAsFixed(2)}');
+      print('Generated weekly summary for user $userId ($userName): ${totalTasks} unique tasks, ${totalPoints} points, RM${totalEarnings.toStringAsFixed(2)}');
       return summaryData;
 
     } catch (e) {
@@ -562,30 +848,30 @@ class UserDataService {
   // Check if user has any data
   static Future<bool> userHasData(String userId) async {
     try {
-      // Check if user has any records in pointsHistory or moneyHistory
-      final pointsCheck = await _firestore
-          .collection('users')
-          .doc(userId)
-          .collection('pointsHistory')
-          .limit(1)
-          .get();
+      print('Checking if user $userId has data...');
 
-      final moneyCheck = await _firestore
-          .collection('users')
-          .doc(userId)
-          .collection('moneyHistory')
-          .limit(1)
-          .get();
+      final summary = await getUserDataSummary(userId);
 
-      // Check if user has profile details
-      final profileCheck = await _firestore
-          .collection('users')
-          .doc(userId)
-          .collection('profiledetails')
-          .doc('profile')
-          .get();
+      final hasData = summary['dataAvailable'] as bool;
+      final pointsCount = summary['pointsHistoryCount'] as int;
+      final moneyCount = summary['moneyHistoryCount'] as int;
+      final hasProfile = summary['hasProfile'] as bool;
 
-      return pointsCheck.docs.isNotEmpty || moneyCheck.docs.isNotEmpty || profileCheck.exists;
+      print('User $userId data check result:');
+      print('  - Points history records: $pointsCount');
+      print('  - Money history records: $moneyCount');
+      print('  - Has profile: $hasProfile');
+      print('  - Data available: $hasData');
+
+      if (hasData) {
+        final earliestDate = summary['earliestPointsDate'] ?? summary['earliestMoneyDate'];
+        final latestDate = summary['latestPointsDate'] ?? summary['latestMoneyDate'];
+        if (earliestDate != null && latestDate != null) {
+          print('  - Date range: $earliestDate to $latestDate');
+        }
+      }
+
+      return hasData;
     } catch (e) {
       print('Error checking if user has data: $e');
       return false;
@@ -602,7 +888,7 @@ class UserDataService {
     }
   }
 
-  // Update user profile data (removed level references)
+  // Update user profile data
   static Future<void> updateUserProfile(String userId, Map<String, dynamic> updates) async {
     try {
       await _firestore
@@ -665,7 +951,7 @@ class UserDataService {
     }
   }
 
-  // NEW: Add money transaction
+  // Add money transaction
   static Future<void> addMoneyTransaction({
     required String userId,
     required double amount,

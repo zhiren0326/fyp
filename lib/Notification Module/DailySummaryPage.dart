@@ -98,7 +98,13 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
         _isLoading = false;
       });
 
-      print('Daily summary loaded successfully: ${summaryData['totalTasks']} tasks, ${summaryData['pointsEarned']} points, ${summaryData['userName']}');
+      // IMPROVED: Better logging with null safety
+      final totalTasks = summaryData['totalTasks'] as int? ?? 0;
+      final pointsEarned = summaryData['pointsEarned'] as int? ?? 0;
+      final totalEarnings = summaryData['totalEarnings'] as double? ?? 0.0;
+      final userName = summaryData['userName'] as String? ?? 'User';
+
+      print('Daily summary loaded successfully: $totalTasks tasks, $pointsEarned points, RM${totalEarnings.toStringAsFixed(2)}, user: $userName');
 
     } catch (e) {
       print('Error loading daily summary: $e');
@@ -477,6 +483,181 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
     );
   }
 
+  Widget _buildDataSourceInfo() {
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.blue[600], size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Data Sources',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blue[600],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (_currentUserId != null) ...[
+              _buildSourceRow('User ID', _currentUserId!.substring(0, 12) + '...'),
+              _buildSourceRow('Points Data', 'users/{userId}/pointsHistory'),
+              _buildSourceRow('Money Data', 'users/{userId}/moneyHistory'),
+              _buildSourceRow('Profile Data', 'users/{userId}/profiledetails/profile'),
+              _buildSourceRow('Date Filter', _selectedDate),
+            ] else
+              Text(
+                'No user logged in',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSourceRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              color: Colors.grey[600],
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: GoogleFonts.poppins(
+                fontSize: 11,
+                color: Colors.grey[500],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+// 3. IMPROVEMENT: Enhanced empty state handling
+  Widget _buildEmptyState() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          children: [
+            Icon(Icons.calendar_today_outlined, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              'No activities found',
+              style: GoogleFonts.poppins(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No data found for ${_formatDate(DateTime.parse(_selectedDate))}',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            if (_currentUserId != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[200]!),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Checked Collections:',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '✓ pointsHistory\n✓ moneyHistory\n✓ profiledetails',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.blue[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: _selectDate,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF006D77),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    'Select Different Date',
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                if (_currentUserId != null)
+                  OutlinedButton(
+                    onPressed: _loadDailySummary,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF006D77)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'Retry',
+                      style: GoogleFonts.poppins(color: const Color(0xFF006D77)),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildDetailedTimeline() {
     if (_summaryData == null) return const SizedBox.shrink();
 
@@ -772,37 +953,8 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // User Info Card
-              if (_currentUserId != null)
-                Card(
-                  elevation: 1,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Icon(Icons.person, color: Colors.grey[600], size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'User: ${_currentUserId!.substring(0, 8)}...',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          'Data Source: pointsHistory + moneyHistory + profiledetails',
-                          style: GoogleFonts.poppins(
-                            fontSize: 10,
-                            color: Colors.grey[500],
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+              // Data Source Info Card (IMPROVED)
+              _buildDataSourceInfo(),
 
               const SizedBox(height: 16),
 
@@ -855,8 +1007,9 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
 
               const SizedBox(height: 20),
 
-              // Statistics Grid
+              // Content based on data availability
               if (_summaryData != null) ...[
+                // Statistics Grid
                 GridView.count(
                   crossAxisCount: 2,
                   shrinkWrap: true,
@@ -912,59 +1065,15 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
 
                 // Activity Timeline
                 _buildDetailedTimeline(),
-              ] else ...[
-                Card(
-                  elevation: 2,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Column(
-                      children: [
-                        Icon(Icons.info_outline, size: 64, color: Colors.grey[400]),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No activities found for this date',
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            color: Colors.grey[600],
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _currentUserId != null
-                              ? 'User: ${_currentUserId!.substring(0, 8)}...\nChecking: pointsHistory, moneyHistory, and profiledetails'
-                              : 'No user logged in',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey[500],
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: _selectDate,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF006D77),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: Text(
-                            'Select Different Date',
-                            style: GoogleFonts.poppins(color: Colors.white),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+              ] else
+              // Enhanced Empty State (IMPROVED)
+                _buildEmptyState(),
+
               const SizedBox(height: 20),
             ],
           ),
         ),
-      ),
-    );
+      )
+      );
   }
 }
