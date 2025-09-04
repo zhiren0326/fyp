@@ -596,7 +596,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
       // Update jobs collection with the new calculated progress
       final jobDoc = await FirebaseFirestore.instance.collection('jobs').doc(taskId).get();
       if (jobDoc.exists) {
-        // Enhanced notification for completion review
+        // notification for completion review
         if (newProgress == 100) {
           final jobData = jobDoc.data()!;
           final jobCreatorId = jobData['jobCreator'] ?? jobData['postedBy'];
@@ -643,7 +643,7 @@ class _TaskProgressPageState extends State<TaskProgressPage> with TickerProvider
             completionNotes: completionNotes ?? '',
           );
 
-          print('Enhanced completion request notification sent to employer: $jobCreatorId');
+          print('completion request notification sent to employer: $jobCreatorId');
         }
       }
 

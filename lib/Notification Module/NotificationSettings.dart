@@ -709,7 +709,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                 subtitle: 'Get automatic daily and weekly progress reports',
               ),
 
-              // Enhanced Daily Summary Section
+              // Daily Summary Section
               Card(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 elevation: 2,

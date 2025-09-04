@@ -557,7 +557,7 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
     );
   }
 
-// 3. IMPROVEMENT: Enhanced empty state handling
+// 3. IMPROVEMENT: empty state handling
   Widget _buildEmptyState() {
     return Card(
       elevation: 2,
@@ -1066,7 +1066,7 @@ class _DailySummaryPageState extends State<DailySummaryPage> {
                 // Activity Timeline
                 _buildDetailedTimeline(),
               ] else
-              // Enhanced Empty State (IMPROVED)
+              //  Empty State (IMPROVED)
                 _buildEmptyState(),
 
               const SizedBox(height: 20),

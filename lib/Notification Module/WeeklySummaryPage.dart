@@ -126,7 +126,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
         Duration(days: daysFromMonday));
   }
 
-  // Enhanced _loadWeeklySummary with better error handling and debugging
+  // _loadWeeklySummary with better error handling and debugging
   Future<void> _loadWeeklySummary() async {
     if (_currentUserId == null) {
       print('No current user ID available');
@@ -198,7 +198,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
             : null;
       });
 
-      // Enhanced logging
+      // logging
       final totalTasks = summaryData['totalTasks'] as int? ?? 0;
       final totalPoints = summaryData['totalPoints'] as int? ?? 0;
       final totalEarnings = summaryData['totalEarnings'] as double? ?? 0.0;
@@ -388,7 +388,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
     return '${months[date.month - 1]} ${date.day}';
   }
 
-  // Enhanced error display
+  // error display
   Widget _buildErrorState() {
     return Card(
       elevation: 2,

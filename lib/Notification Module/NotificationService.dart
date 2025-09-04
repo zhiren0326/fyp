@@ -1,4 +1,3 @@
-// NotificationService.dart - FIXED timer functionality with proper test/automatic separation
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:async';
@@ -69,7 +68,7 @@ class NotificationService {
       print('Timezone initialized');
 
       // Request notification permissions FIRST with better error handling
-      final permissionGranted = await _requestNotificationPermissionsEnhanced();
+      final permissionGranted = await _requestNotificationPermissions();
       print('Notification permission granted: $permissionGranted');
 
       // Initialize local notifications with better error handling
@@ -85,13 +84,13 @@ class NotificationService {
       print('Firebase messaging initialized');
 
       // Start listening to Firestore notifications with retry
-      await _startListeningToFirestoreNotificationsEnhanced();
+      await _startListeningToFirestoreNotifications();
       print('Firestore notification listener started');
 
       // Start timer to check scheduled notifications every minute (FIXED for precise timing)
       _scheduledNotificationTimer = Timer.periodic(
         const Duration(minutes: 1), // Changed from 2 minutes to 1 minute for better precision
-            (timer) => _processScheduledNotificationsEnhanced(),
+            (timer) => _processScheduledNotifications(),
       );
       print('Scheduled notification timer started (every 1 minute for precise timing)');
 
@@ -102,15 +101,15 @@ class NotificationService {
       );
       print('Permission check timer started');
 
-      // Initialize enhanced summary notifications (FIXED timer system)
-      await EnhancedSummaryNotificationService.initializeEnhancedSummaryNotifications();
-      print('🚀 Enhanced summary notification service initialized');
+      // Initialize  summary notifications (FIXED timer system)
+      await SummaryNotificationService.initializeSummaryNotifications();
+      print('🚀  summary notification service initialized');
 
       // Check immediately on startup
-      _processScheduledNotificationsEnhanced();
+      _processScheduledNotifications();
 
       _isInitialized = true;
-      print('✅ Enhanced summary notification service initialized');
+      print('✅  summary notification service initialized');
       print('NotificationService initialization completed successfully');
 
     } catch (e) {
@@ -312,7 +311,7 @@ class NotificationService {
     }
   }
 
-  // Enhanced initialization for local notifications
+  //  initialization for local notifications
   Future<void> _initializeLocalNotifications() async {
     try {
       const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -382,8 +381,8 @@ class NotificationService {
     }
   }
 
-  // Enhanced permission handling
-  Future<bool> _requestNotificationPermissionsEnhanced() async {
+  //  permission handling
+  Future<bool> _requestNotificationPermissions() async {
     try {
       if (Platform.isAndroid) {
         final androidInfo = await DeviceInfoPlugin().androidInfo;
@@ -433,7 +432,7 @@ class NotificationService {
     }
   }
 
-  // Enhanced permission checking
+  //  permission checking
   Future<bool> _checkNotificationPermissions() async {
     try {
       if (Platform.isAndroid) {
@@ -464,7 +463,7 @@ class NotificationService {
     final hasPermissions = await _checkNotificationPermissions();
     if (!hasPermissions) {
       print('⚠️ Notification permissions lost - attempting to request again');
-      await _requestNotificationPermissionsEnhanced();
+      await _requestNotificationPermissions();
     }
   }
 
@@ -472,18 +471,15 @@ class NotificationService {
     _navigatorKey = key;
   }
 
-  // Enhanced Firestore listener with better error handling and deduplication
-  Future<void> _startListeningToFirestoreNotificationsEnhanced() async {
+  //Firestore listener with better error handling and deduplication
+  Future<void> _startListeningToFirestoreNotifications() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       print('No user authenticated - cannot listen to notifications');
       return;
     }
-
     print('Starting to listen for notifications for user: ${user.uid}');
-
     _notificationSubscription?.cancel(); // Cancel any existing subscription
-
     _notificationSubscription = FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
@@ -508,7 +504,7 @@ class NotificationService {
             }
 
             final notification = doc.data() as Map<String, dynamic>;
-            await _processFirestoreNotificationEnhanced(docId, notification);
+            await _processFirestoreNotification(docId, notification);
           }
         }
       },
@@ -517,15 +513,15 @@ class NotificationService {
         // Restart listener after a delay
         Timer(const Duration(seconds: 5), () {
           print('Restarting Firestore notification listener...');
-          _startListeningToFirestoreNotificationsEnhanced();
+          _startListeningToFirestoreNotifications();
         });
       },
       cancelOnError: false,
     );
   }
 
-  // Enhanced notification processing with retry logic
-  Future<void> _processFirestoreNotificationEnhanced(String docId, Map<String, dynamic> notificationData) async {
+  //  notification processing with retry logic
+  Future<void> _processFirestoreNotification(String docId, Map<String, dynamic> notificationData) async {
     try {
       print('Processing Firestore notification: ${notificationData['title']}');
 
@@ -558,7 +554,7 @@ class NotificationService {
       final hasPermissions = await _checkNotificationPermissions();
       if (!hasPermissions) {
         print('⚠️ No notification permissions - attempting to request');
-        final granted = await _requestNotificationPermissionsEnhanced();
+        final granted = await _requestNotificationPermissions();
         if (!granted) {
           print('❌ Cannot show notification - no permissions');
           // Still mark as sent to avoid retrying
@@ -574,7 +570,7 @@ class NotificationService {
       while (!success && attempts < maxRetries) {
         try {
           attempts++;
-          await _showLocalNotificationEnhanced(
+          await _showLocalNotification(
             title: title,
             body: body,
             payload: jsonEncode(data),
@@ -608,8 +604,8 @@ class NotificationService {
     }
   }
 
-  // Enhanced local notification display
-  Future<void> _showLocalNotificationEnhanced({
+  //  local notification display
+  Future<void> _showLocalNotification({
     required String title,
     required String body,
     required String payload,
@@ -633,8 +629,8 @@ class NotificationService {
       // Generate unique ID
       final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
 
-      // Enhanced notification details
-      final notificationDetails = _getNotificationDetailsEnhanced(priority, showBigText: showBigText);
+      //  notification details
+      final notificationDetails = _getNotificationDetails(priority, showBigText: showBigText);
 
       await _flutterLocalNotificationsPlugin.show(
         id,
@@ -658,8 +654,8 @@ class NotificationService {
     }
   }
 
-  // Enhanced notification details with better Android 13+ support
-  NotificationDetails _getNotificationDetailsEnhanced(NotificationPriority priority, {bool showBigText = false}) {
+  //  notification details with better Android 13+ support
+  NotificationDetails _getNotificationDetails(NotificationPriority priority, {bool showBigText = false}) {
     final isUrgent = priority == NotificationPriority.urgent;
     final isHigh = priority == NotificationPriority.high;
 
@@ -717,8 +713,8 @@ class NotificationService {
     return NotificationDetails(android: androidDetails, iOS: iosDetails);
   }
 
-  // Enhanced scheduled notification processing
-  Future<void> _processScheduledNotificationsEnhanced() async {
+  //  scheduled notification processing
+  Future<void> _processScheduledNotifications() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -746,7 +742,7 @@ class NotificationService {
 
           if (now.isAfter(scheduledFor) || now.isAtSameMomentAs(scheduledFor)) {
             print('⏰ Processing scheduled notification: ${data['title']} (was scheduled for $scheduledFor)');
-            await _processFirestoreNotificationEnhanced(doc.id, data);
+            await _processFirestoreNotification(doc.id, data);
             processed++;
           }
         }
@@ -840,7 +836,7 @@ class NotificationService {
     }
   }
 
-  // Enhanced notification channel creation
+  //  notification channel creation
   Future<void> _createNotificationChannels() async {
     final androidPlugin = _flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
@@ -1019,8 +1015,8 @@ class NotificationService {
       print('Notification preferences saved successfully');
 
       // FIXED: Reinitialize the summary service to pick up new preferences
-      EnhancedSummaryNotificationService.dispose();
-      await EnhancedSummaryNotificationService.initializeEnhancedSummaryNotifications();
+      SummaryNotificationService.dispose();
+      await SummaryNotificationService.initializeSummaryNotifications();
       print('📱 Summary service reinitialized with new preferences');
 
     } catch (e) {
@@ -1072,7 +1068,6 @@ class NotificationService {
         print('🚨 DEADLINE REMINDERS: Second warning time: $secondWarningTime');
         print('🚨 DEADLINE REMINDERS: Final warning time: $finalWarningTime');
 
-        // FIXED: Schedule primary warning (only if it's in the future)
         if (primaryWarningTime.isAfter(now)) {
           print('✅ DEADLINE REMINDERS: Scheduling PRIMARY warning for $primaryWarningTime');
           await createFirestoreNotification(
@@ -1096,8 +1091,6 @@ class NotificationService {
           print('⚠️ DEADLINE REMINDERS: Primary warning time has passed, not scheduling');
         }
 
-        // FIXED: Schedule second warning with better logic
-        // Remove the condition that they must be different - user might want same time for testing
         if (secondWarningTime.isAfter(now)) {
           print('✅ DEADLINE REMINDERS: Scheduling URGENT warning for $secondWarningTime');
           await createFirestoreNotification(
@@ -1108,12 +1101,12 @@ class NotificationService {
               'type': typeTaskDeadline,
               'taskId': taskId,
               'taskTitle': taskTitle,
-              'warningType': 'urgent', // Changed from 'second' to 'urgent'
+              'warningType': 'urgent',
               'hoursRemaining': secondWarningHours.toString(),
               'deadlineTime': deadline.toIso8601String(),
               'isUrgent': true, // Add urgent flag
             },
-            priority: NotificationPriority.urgent, // Changed from high to urgent
+            priority: NotificationPriority.urgent,
             scheduledFor: secondWarningTime,
             sendImmediately: false,
           );
@@ -1121,7 +1114,6 @@ class NotificationService {
         } else {
           print('⚠️ DEADLINE REMINDERS: Urgent warning time has passed, not scheduling');
 
-          // FIXED: If urgent time has passed but we're still before deadline, send immediately
           if (now.isBefore(deadline)) {
             print('🚨 DEADLINE REMINDERS: Urgent warning time passed but deadline not reached - sending immediately!');
             await createFirestoreNotification(
@@ -1145,7 +1137,6 @@ class NotificationService {
           }
         }
 
-        // FIXED: Schedule final warning (30 minutes before deadline)
         if (finalWarningTime.isAfter(now) && finalWarningTime.isAfter(secondWarningTime.add(Duration(minutes: 15)))) {
           print('✅ DEADLINE REMINDERS: Scheduling FINAL warning for $finalWarningTime');
           await createFirestoreNotification(
@@ -1783,7 +1774,7 @@ class NotificationService {
     await createFirestoreNotification(
       userId: user.uid,
       title: '🧪 Test Notification Flow',
-      body: 'This tests the complete notification flow with enhanced error handling',
+      body: 'This tests the complete notification flow with  error handling',
       data: {
         'type': 'test_flow',
         'timestamp': DateTime.now().toIso8601String(),
@@ -1803,7 +1794,7 @@ class NotificationService {
     await createFirestoreNotification(
       userId: user.uid,
       title: '🚨 URGENT TEST ALERT',
-      body: 'This is an urgent notification test with enhanced reliability!',
+      body: 'This is an urgent notification test with  reliability!',
       data: {
         'type': 'test_urgent',
         'urgency': 'critical',
@@ -2054,13 +2045,13 @@ class NotificationService {
     _permissionCheckTimer?.cancel();
     _processedNotifications.clear();
     _retryAttempts.clear();
-    EnhancedSummaryNotificationService.dispose();
+    SummaryNotificationService.dispose();
     print('NotificationService disposed');
   }
 }
 
-// FIXED Enhanced Summary Notification Service with proper test/automatic separation
-class EnhancedSummaryNotificationService {
+// FIXED  Summary Notification Service with proper test/automatic separation
+class SummaryNotificationService {
   static Timer? _mainTimer;
   static Timer? _backgroundTimer;
   static bool _isInitialized = false;
@@ -2069,14 +2060,12 @@ class EnhancedSummaryNotificationService {
   static String? _lastDailySummaryDate;
   static String? _lastWeeklySummaryWeek;
 
-  static Future<void> initializeEnhancedSummaryNotifications() async {
+  static Future<void> initializeSummaryNotifications() async {
     if (_isInitialized) {
-      print('🔄 Enhanced summary service already initialized, reinitializing...');
+      print('🔄  summary service already initialized, reinitializing...');
       dispose();
     }
-
-    print('🚀 Initializing FIXED enhanced summary notification service...');
-
+    print('🚀 Initializing FIXED  summary notification service...');
     try {
       // FIXED: Main timer - checks every 1 minute for precise timing
       _mainTimer = Timer.periodic(
@@ -2103,9 +2092,9 @@ class EnhancedSummaryNotificationService {
       });
 
       _isInitialized = true;
-      print('✅ FIXED Enhanced summary notification service initialized');
+      print('✅ FIXED  summary notification service initialized');
     } catch (e) {
-      print('❌ Failed to initialize enhanced summary service: $e');
+      print('❌ Failed to initialize  summary service: $e');
       _isInitialized = false;
     }
   }
@@ -2628,7 +2617,7 @@ class EnhancedSummaryNotificationService {
     _isInitialized = false;
     _lastDailySummaryDate = null; // FIXED: Clear cache
     _lastWeeklySummaryWeek = null; // FIXED: Clear cache
-    print('🛑 FIXED Enhanced summary notification service disposed');
+    print('🛑 FIXED  summary notification service disposed');
   }
 }
 
